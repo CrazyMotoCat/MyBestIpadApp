@@ -1,0 +1,42 @@
+name: Сообщение об ошибке
+description: Сообщить о баге в MyBestIpadApp
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Что произошло
+      description: Кратко опишите проблему
+      placeholder: Например, после открытия блокнота страница зависает
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      description: Укажите шаги воспроизведения
+      placeholder: |
+        1. Открыть приложение
+        2. Перейти в ...
+        3. Нажать на ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидалось
+      placeholder: Например, должна открыться страница редактора
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Среда
+      description: Устройство, браузер, версия ОС, режим PWA
+      placeholder: iPad Safari / macOS Chrome / Windows Edge
+

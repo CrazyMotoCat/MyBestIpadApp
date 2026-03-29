@@ -114,6 +114,11 @@ export async function createPage(notebookId: string, title: string) {
   const db = await getDatabase();
   const existing = await listPages(notebookId);
   const notebook = await getNotebook(notebookId);
+
+  if (!notebook) {
+    throw new Error("Notebook not found");
+  }
+
   const now = new Date().toISOString();
   const pageOrder = existing.length + 1;
 
@@ -123,10 +128,8 @@ export async function createPage(notebookId: string, title: string) {
     title,
     order: pageOrder,
     pageOrder,
-    paperType: notebook?.defaultPaperType ?? notebook?.paperType ?? defaultPaperPresetId,
-    paperColor:
-      notebook?.defaultPaperColor ??
-      getPaperPreset(notebook?.defaultPaperType ?? notebook?.paperType ?? defaultPaperPresetId).baseColor,
+    paperType: notebook.defaultPaperType ?? notebook.paperType ?? defaultPaperPresetId,
+    paperColor: notebook.defaultPaperColor ?? getPaperPreset(notebook.defaultPaperType ?? notebook.paperType ?? defaultPaperPresetId).baseColor,
     layout: "freeform",
     isBookmarked: false,
     createdAt: now,
@@ -136,6 +139,17 @@ export async function createPage(notebookId: string, title: string) {
   await db.put("pages", page);
   await touchNotebook(notebookId);
   return page;
+}
+
+export async function getOrCreateNotebookEntryPage(notebookId: string) {
+  const notebook = await getNotebook(notebookId);
+
+  if (!notebook) {
+    throw new Error("Notebook not found");
+  }
+
+  const pages = await listPages(notebookId);
+  return pages[0] ?? createPage(notebookId, "Первая страница");
 }
 
 interface UpdatePageInput {

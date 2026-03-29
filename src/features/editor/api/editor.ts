@@ -7,6 +7,7 @@ import {
   DrawingStroke,
   FileAttachmentPageElement,
   ImagePageElement,
+  PageElement,
   ShapeNoteElement,
   TextPageElement,
 } from "@/shared/types/models";
@@ -232,6 +233,34 @@ export async function updateShapeNote(element: ShapeNoteElement) {
     ...element,
     updatedAt: nowIso(),
   });
+}
+
+export async function updatePageElement<
+  TElement extends PageElement,
+>(element: TElement) {
+  const db = await getDatabase();
+  const updatedElement = {
+    ...element,
+    updatedAt: nowIso(),
+  } as TElement;
+
+  await db.put("pageElements", updatedElement);
+  return updatedElement;
+}
+
+export async function deletePageElement(elementId: string) {
+  const db = await getDatabase();
+  const element = await db.get("pageElements", elementId);
+
+  if (!element) {
+    return;
+  }
+
+  await db.delete("pageElements", elementId);
+
+  if (element.type === "image" || element.type === "fileAttachment") {
+    await db.delete("assets", element.assetId);
+  }
 }
 
 export { getAssetById, getAssetObjectUrl };
