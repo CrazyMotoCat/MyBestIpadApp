@@ -1,4 +1,4 @@
-import { CSSProperties, ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { CSSProperties, ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PaperPresetPicker } from "@/features/editor/components/PaperPresetPicker";
 import { ToolPresetPicker } from "@/features/editor/components/ToolPresetPicker";
 import { NotebookBinding } from "@/features/notebooks/components/NotebookBinding";
@@ -41,9 +41,11 @@ interface CreateNotebookModalProps {
   initialValues?: Partial<NotebookFormState>;
   titleText?: string;
   submitText?: string;
+  closeDelayMs?: number;
 }
 
 const colorPalette = ["#6f7cff", "#ff6a63", "#78ffd8", "#ff9a6a", "#96b7ff", "#d38dff"];
+const DEFAULT_NOTEBOOK_TITLE = "Новый блокнот";
 
 function buildInitialState(initialValues?: Partial<NotebookFormState>): NotebookFormState {
   return {
@@ -81,10 +83,12 @@ export function CreateNotebookModal({
   initialValues,
   titleText = "Создать блокнот",
   submitText = "Создать",
+  closeDelayMs = 0,
 }: CreateNotebookModalProps) {
   const [form, setForm] = useState<NotebookFormState>(buildInitialState(initialValues));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customCoverUrl, setCustomCoverUrl] = useState<string | null>(null);
+  const closeTimeoutRef = useRef<number | null>(null);
 
   const styleCards = useMemo(() => notebookStylePresets, []);
   const notebookStyle = styleCards.find((preset) => preset.id === form.style) ?? styleCards[0]!;
@@ -113,6 +117,14 @@ export function CreateNotebookModal({
     };
   }, [form.coverImage]);
 
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current !== null) {
+        window.clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
+
   function updateField<Key extends keyof NotebookFormState>(key: Key, value: NotebookFormState[Key]) {
     setForm((current) => ({
       ...current,
@@ -122,20 +134,26 @@ export function CreateNotebookModal({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
-    if (!form.title.trim()) {
-      return;
-    }
+    const normalizedTitle = form.title.trim() || DEFAULT_NOTEBOOK_TITLE;
 
     setIsSubmitting(true);
 
     await onCreate({
       ...form,
-      title: form.title.trim(),
+      title: normalizedTitle,
     });
 
     setIsSubmitting(false);
     setForm(buildInitialState(initialValues));
+
+    if (closeDelayMs > 0) {
+      closeTimeoutRef.current = window.setTimeout(() => {
+        closeTimeoutRef.current = null;
+        onClose();
+      }, closeDelayMs);
+      return;
+    }
+
     onClose();
   }
 

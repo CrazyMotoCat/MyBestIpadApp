@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070d" />
+    <title>MyBestIpadApp Offline</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(126, 143, 255, 0.22), transparent 30%),
+          linear-gradient(180deg, #05070d, #0b1220 48%, #06080f);
+        color: #f4f7ff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .offline-card {
+        width: min(560px, 100%);
+        padding: 28px;
+        border-radius: 28px;
+        border: 1px solid rgba(153, 172, 255, 0.16);
+        background: rgba(12, 18, 31, 0.8);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
+        backdrop-filter: blur(20px);
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-family: "Palatino Linotype", "Book Antiqua", serif;
+        font-size: clamp(2rem, 4vw, 3rem);
+        line-height: 1.05;
+      }
+
+      p {
+        margin: 0;
+        color: #aab6d4;
+        line-height: 1.65;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="offline-card">
+      <h1>MyBestIpadApp</h1>
+      <p>Приложение уже установлено и может работать без интернета. Если экран открылся в этом режиме до прогрева всех ресурсов, подключите сеть один раз, откройте приложение полностью, а потом снова запускайте его офлайн с рабочего стола iPad.</p>
+    </main>
+  </body>
+</html>

@@ -221,6 +221,56 @@ export async function touchNotebook(notebookId: string) {
   });
 }
 
+export async function deleteNotebook(notebookId: string) {
+  const db = await getDatabase();
+  const notebook = await getNotebook(notebookId);
+
+  if (!notebook) {
+    return null;
+  }
+
+  const pages = await db.getAllFromIndex("pages", "by-notebookId", notebookId);
+  const notebookAttachments = await db.getAllFromIndex("notebookAttachments", "by-notebookId", notebookId);
+  const notebookAssets = await db.getAllFromIndex("assets", "by-ownerId", notebookId);
+  const transaction = db.transaction(
+    ["notebooks", "pages", "pageElements", "drawingStrokes", "assets", "notebookAttachments"],
+    "readwrite",
+  );
+
+  await transaction.objectStore("notebooks").delete(notebookId);
+
+  for (const attachment of notebookAttachments) {
+    await transaction.objectStore("notebookAttachments").delete(attachment.id);
+  }
+
+  for (const asset of notebookAssets) {
+    await transaction.objectStore("assets").delete(asset.id);
+  }
+
+  for (const page of pages) {
+    await transaction.objectStore("pages").delete(page.id);
+
+    const pageElements = await db.getAllFromIndex("pageElements", "by-pageId", page.id);
+    const drawingStrokes = await db.getAllFromIndex("drawingStrokes", "by-pageId", page.id);
+    const pageAssets = await db.getAllFromIndex("assets", "by-ownerId", page.id);
+
+    for (const element of pageElements) {
+      await transaction.objectStore("pageElements").delete(element.id);
+    }
+
+    for (const stroke of drawingStrokes) {
+      await transaction.objectStore("drawingStrokes").delete(stroke.id);
+    }
+
+    for (const asset of pageAssets) {
+      await transaction.objectStore("assets").delete(asset.id);
+    }
+  }
+
+  await transaction.done;
+  return notebook;
+}
+
 export async function listNotebookAttachments(notebookId: string) {
   const db = await getDatabase();
   const attachments = await db.getAllFromIndex("notebookAttachments", "by-notebookId", notebookId);

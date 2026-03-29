@@ -2,26 +2,29 @@ import { BindingPresetId } from "@/shared/types/presets";
 
 interface NotebookBindingProps {
   bindingType: BindingPresetId;
+  className?: string;
 }
 
-export function NotebookBinding({ bindingType }: NotebookBindingProps) {
+export function NotebookBinding({ bindingType, className = "" }: NotebookBindingProps) {
+  const baseClassName = `binding ${className}`.trim();
+
   if (bindingType === "clip") {
-    return <div className="binding binding--clip" aria-hidden="true" />;
+    return <div className={`${baseClassName} binding--clip`.trim()} aria-hidden="true" />;
   }
 
   if (bindingType === "rings") {
     return (
-      <div className="binding binding--rings" aria-hidden="true">
-        <span />
-        <span />
-        <span />
+      <div className={`${baseClassName} binding--rings`.trim()} aria-hidden="true">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <span key={index} />
+        ))}
       </div>
     );
   }
 
   return (
-    <div className="binding binding--spiral" aria-hidden="true">
-      {Array.from({ length: 8 }).map((_, index) => (
+    <div className={`${baseClassName} binding--spiral`.trim()} aria-hidden="true">
+      {Array.from({ length: 10 }).map((_, index) => (
         <span key={index} />
       ))}
     </div>

@@ -26,7 +26,7 @@ function applyStrokeStyle(
   stroke: Pick<DrawingStroke, "color" | "width" | "opacity" | "strokeStyle">,
 ) {
   context.lineWidth = stroke.width;
-  context.globalAlpha = stroke.opacity;
+  context.globalAlpha = stroke.strokeStyle === "marker" ? stroke.opacity : 1;
   context.lineCap = "round";
   context.lineJoin = "round";
   context.setLineDash([]);
@@ -74,6 +74,19 @@ function drawStroke(context: CanvasRenderingContext2D, stroke: DrawingStroke) {
   context.stroke();
 }
 
+function drawStrokeSegment(
+  context: CanvasRenderingContext2D,
+  stroke: DrawingStroke,
+  previousPoint: DrawingPoint,
+  nextPoint: DrawingPoint,
+) {
+  applyStrokeStyle(context, stroke);
+  context.beginPath();
+  context.moveTo(previousPoint.x, previousPoint.y);
+  context.lineTo(nextPoint.x, nextPoint.y);
+  context.stroke();
+}
+
 export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(function DrawingCanvas(
   {
     strokes,
@@ -88,21 +101,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
   },
   ref,
 ) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const committedCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeStrokeRef = useRef<DrawingStroke | null>(null);
   const strokesRef = useRef<DrawingStroke[]>(strokes);
+  const skipPropRedrawRef = useRef(false);
 
-  useEffect(() => {
-    strokesRef.current = strokes;
-  }, [strokes]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-
-    if (!canvas) {
-      return;
-    }
-
+  function resizeCanvas(canvas: HTMLCanvasElement) {
     const ratio = window.devicePixelRatio || 1;
     const bounds = canvas.getBoundingClientRect();
     const width = Math.max(bounds.width, 1);
@@ -114,16 +119,68 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     const context = canvas.getContext("2d");
 
     if (!context) {
-      return;
+      return null;
     }
 
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
+    return context;
+  }
 
-    for (const stroke of strokes) {
+  function drawStrokeList(canvas: HTMLCanvasElement | null, nextStrokes: DrawingStroke[]) {
+    if (!canvas) {
+      return;
+    }
+
+    const context = resizeCanvas(canvas);
+
+    if (!context) {
+      return;
+    }
+
+    for (const stroke of nextStrokes) {
       drawStroke(context, stroke);
     }
+  }
+
+  function redrawLiveStroke(stroke: DrawingStroke | null) {
+    const liveCanvas = liveCanvasRef.current;
+
+    if (!liveCanvas) {
+      return;
+    }
+
+    const context = resizeCanvas(liveCanvas);
+
+    if (!context || !stroke) {
+      return;
+    }
+
+    drawStroke(context, stroke);
+  }
+
+  useEffect(() => {
+    strokesRef.current = strokes;
+
+    if (skipPropRedrawRef.current) {
+      skipPropRedrawRef.current = false;
+      return;
+    }
+
+    drawStrokeList(committedCanvasRef.current, strokes);
+    redrawLiveStroke(activeStrokeRef.current);
   }, [strokes]);
+
+  useEffect(() => {
+    function handleResize() {
+      drawStrokeList(committedCanvasRef.current, strokesRef.current);
+      redrawLiveStroke(activeStrokeRef.current);
+    }
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useImperativeHandle(
     ref,
@@ -143,9 +200,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
         };
 
         activeStrokeRef.current = stroke;
-        const nextStrokes = [...strokesRef.current, stroke];
-        strokesRef.current = nextStrokes;
-        onChange(nextStrokes);
+
+        if (stroke.strokeStyle === "eraser") {
+          redrawLiveStroke(null);
+          return;
+        }
+
+        redrawLiveStroke(stroke);
       },
       appendPoint(point) {
         const activeStroke = activeStrokeRef.current;
@@ -154,22 +215,67 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
           return;
         }
 
+        const previousPoint = activeStroke.points[activeStroke.points.length - 1];
+
         const updatedStroke: DrawingStroke = {
           ...activeStroke,
           points: [...activeStroke.points, point],
         };
 
         activeStrokeRef.current = updatedStroke;
-        const nextStrokes = [...strokesRef.current.slice(0, -1), updatedStroke];
-        strokesRef.current = nextStrokes;
-        onChange(nextStrokes);
+
+        if (!previousPoint) {
+          return;
+        }
+
+        if (updatedStroke.strokeStyle === "eraser") {
+          const committedCanvas = committedCanvasRef.current;
+          const context = committedCanvas?.getContext("2d");
+
+          if (context) {
+            drawStrokeSegment(context, updatedStroke, previousPoint, point);
+          }
+
+          return;
+        }
+
+        const liveCanvas = liveCanvasRef.current;
+        const context = liveCanvas?.getContext("2d");
+
+        if (context) {
+          drawStrokeSegment(context, updatedStroke, previousPoint, point);
+        }
       },
       endStroke() {
+        const committedCanvas = committedCanvasRef.current;
+        const activeStroke = activeStrokeRef.current;
+
+        if (committedCanvas && activeStroke && activeStroke.strokeStyle !== "eraser") {
+          const context = committedCanvas.getContext("2d");
+
+          if (context) {
+            drawStroke(context, activeStroke);
+          }
+        }
+
+        if (activeStroke) {
+          const nextStrokes = [...strokesRef.current, activeStroke];
+          strokesRef.current = nextStrokes;
+          skipPropRedrawRef.current = true;
+          onChange(nextStrokes);
+        }
+
         activeStrokeRef.current = null;
+        redrawLiveStroke(null);
       },
     }),
     [color, onChange, opacity, smoothing, strokeStyle, strokeWidth, toolId],
   );
 
-  return <canvas ref={canvasRef} className={className ?? "editor-canvas"} aria-hidden="true" />;
+  return (
+    <>
+      <canvas ref={committedCanvasRef} className={className ?? "editor-canvas"} aria-hidden="true" />
+      <canvas ref={liveCanvasRef} className={className ?? "editor-canvas"} aria-hidden="true" />
+    </>
+  );
 });

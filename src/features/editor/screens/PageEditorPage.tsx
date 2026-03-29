@@ -1,5 +1,6 @@
 import { CSSProperties, ChangeEvent, PointerEvent as ReactPointerEvent, TouchEvent, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { createPortal } from "react-dom";
+import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
 import { DrawingCanvas, DrawingCanvasHandle } from "@/features/drawing/components/DrawingCanvas";
 import {
   addFileToPage,
@@ -21,6 +22,7 @@ import { ShapeInsertLibrary } from "@/features/editor/components/ShapeInsertLibr
 import { ShapeNoteLayer } from "@/features/editor/components/ShapeNoteLayer";
 import { ToolPresetPicker } from "@/features/editor/components/ToolPresetPicker";
 import { getNotebook } from "@/features/notebooks/api/notebooks";
+import { NotebookBinding } from "@/features/notebooks/components/NotebookBinding";
 import { createPage, deletePage, getPage, listPages, setPageBookmark, updatePage } from "@/features/pages/api/pages";
 import { getToolPreset } from "@/shared/config/toolPresets";
 import { buildPaperStyle } from "@/shared/lib/paper";
@@ -54,6 +56,13 @@ const strokeStyleLabels: Record<ToolStrokeStyle, string> = {
 };
 
 const PAGE_DELETE_ANIMATION_MS = 340;
+const AUTOSAVE_DELAY_MS = 10 * 60 * 1000;
+const SAVE_STATE_LOADING = "Загрузка";
+const SAVE_STATE_PENDING = "Черновик";
+const SAVE_STATE_SAVED = "Все изменения сохранены";
+const SAVE_STATE_ERROR = "Ошибка сохранения";
+const DEFAULT_DRAWING_COLOR = "#111111";
+const quickPaletteColors = [DEFAULT_DRAWING_COLOR, "#d7e8ff", "#f8fbff", "#9ed0ff", "#7fffd4", "#d5ff72", "#ffd7b8", "#ff9d8c", "#c9cbc7"];
 
 function getMaxElementZIndex(
   images: ImagePageElement[],
@@ -83,12 +92,16 @@ export function PageEditorPage() {
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const drawingCanvasRef = useRef<DrawingCanvasHandle | null>(null);
   const sheetPageRef = useRef<HTMLDivElement | null>(null);
+  const paletteButtonRef = useRef<HTMLDivElement | null>(null);
+  const palettePopoverRef = useRef<HTMLDivElement | null>(null);
   const touchStartXRef = useRef<number | null>(null);
   const touchStartYRef = useRef<number | null>(null);
   const hydratedRef = useRef(false);
   const drawingPointerIdRef = useRef<number | null>(null);
+  const recentPenInteractionUntilRef = useRef(0);
   const zIndexCounterRef = useRef(1);
   const deleteTimeoutRef = useRef<number | null>(null);
+  const saveTimeoutRef = useRef<number | null>(null);
 
   const [notebook, setNotebook] = useState<Notebook | null>(null);
   const [page, setPage] = useState<Page | null>(null);
@@ -106,10 +119,11 @@ export function PageEditorPage() {
   const [shapes, setShapes] = useState<ShapeNoteElement[]>([]);
   const [selectedToolId, setSelectedToolId] = useState<ToolPresetId>("ballpoint");
   const [lastDrawingToolId, setLastDrawingToolId] = useState<ToolPresetId>("ballpoint");
-  const [toolColor, setToolColor] = useState("#d7e8ff");
+  const [toolColor, setToolColor] = useState(DEFAULT_DRAWING_COLOR);
   const [toolWidth, setToolWidth] = useState(2.2);
   const [toolOpacity, setToolOpacity] = useState(0.92);
-  const [saveState, setSaveState] = useState("Загрузка");
+  const [eraserWidth, setEraserWidth] = useState(16);
+  const [saveState, setSaveState] = useState(SAVE_STATE_LOADING);
   const [insertColor, setInsertColor] = useState("#fff1a6");
   const [insertPaperStyle, setInsertPaperStyle] = useState<PaperPresetId>("plain");
   const [insertEdgeStyle, setInsertEdgeStyle] = useState<ShapeNoteElement["edgeStyle"]>("straight");
@@ -121,14 +135,24 @@ export function PageEditorPage() {
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [isDeletingPage, setIsDeletingPage] = useState(false);
   const [pageDeleteOffset, setPageDeleteOffset] = useState({ x: 0, y: 0 });
+  const [isKeyboardTextMode, setIsKeyboardTextMode] = useState(false);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [palettePopoverPosition, setPalettePopoverPosition] = useState({ top: 0, left: 0 });
 
   const toolPreset = getToolPreset(selectedToolId);
+  const navigationBlocker = useBlocker(({ historyAction }) => historyAction === "POP");
   const activeSidebarSection = sidebarSections.find((section) => section.id === activeSection) ?? null;
   const isEraserActive = selectedToolId === "eraser";
   const currentPageIndex = page ? pages.findIndex((item) => item.id === page.id) : -1;
   const canGoPrev = currentPageIndex > 0;
   const nextPageLabel = currentPageIndex >= 0 && currentPageIndex < pages.length - 1 ? "Следующая" : "Новый лист";
   const pageIndexLabel = currentPageIndex >= 0 ? `Лист ${currentPageIndex + 1} из ${pages.length}` : "Лист";
+  const saveStateClassName =
+    saveState === SAVE_STATE_PENDING
+      ? "editor-sheet__status-pill--quiet"
+      : saveState === SAVE_STATE_ERROR
+        ? "editor-sheet__status-pill--error"
+        : "editor-sheet__status-pill--save";
 
   async function loadPage(targetPageId: string) {
     const pageRecord = await getPage(targetPageId);
@@ -159,18 +183,19 @@ export function PageEditorPage() {
     setActiveElementId(null);
     setIsDeletingPage(false);
     setPageDeleteOffset({ x: 0, y: 0 });
+    setIsKeyboardTextMode(false);
     zIndexCounterRef.current = getMaxElementZIndex(bundle.images, bundle.files, bundle.shapes) + 1;
 
     const initialTool = notebookRecord?.defaultTool ?? "ballpoint";
     const preset = getToolPreset(initialTool);
     setSelectedToolId(initialTool);
     setLastDrawingToolId(initialTool === "eraser" ? "ballpoint" : initialTool);
-    setToolColor(preset.defaultColor);
-    setToolWidth(preset.defaultWidth);
+    setToolColor(DEFAULT_DRAWING_COLOR);
+    setToolWidth(initialTool === "eraser" ? eraserWidth : preset.defaultWidth);
     setToolOpacity(preset.defaultOpacity);
     setInsertPaperStyle(pageRecord.paperType);
     setInsertColor(pageRecord.paperColor);
-    setSaveState("Все изменения сохранены");
+    setSaveState(SAVE_STATE_SAVED);
     setStatus("ready");
     hydratedRef.current = true;
   }
@@ -189,67 +214,148 @@ export function PageEditorPage() {
 
   useEffect(() => {
     const preset = getToolPreset(selectedToolId);
-    setToolColor(preset.defaultColor);
-    setToolWidth(preset.defaultWidth);
+    if (selectedToolId !== "eraser") {
+      setToolColor(DEFAULT_DRAWING_COLOR);
+    }
+    setToolWidth(selectedToolId === "eraser" ? eraserWidth : preset.defaultWidth);
     setToolOpacity(preset.defaultOpacity);
 
     if (selectedToolId !== "eraser") {
       setLastDrawingToolId(selectedToolId);
     }
-  }, [selectedToolId]);
+  }, [eraserWidth, selectedToolId]);
 
   useEffect(() => {
     return () => {
       if (deleteTimeoutRef.current !== null) {
         window.clearTimeout(deleteTimeoutRef.current);
       }
+
+      if (saveTimeoutRef.current !== null) {
+        window.clearTimeout(saveTimeoutRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!isPaletteOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+
+      if (paletteButtonRef.current?.contains(target) || palettePopoverRef.current?.contains(target)) {
+        return;
+      }
+
+      setIsPaletteOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [isPaletteOpen]);
+
+  useEffect(() => {
+    if (isEraserActive) {
+      setIsPaletteOpen(false);
+    }
+  }, [isEraserActive]);
+
+  useEffect(() => {
+    if (navigationBlocker.state === "blocked") {
+      navigationBlocker.reset();
+    }
+  }, [navigationBlocker]);
+
+  useEffect(() => {
+    if (!isPaletteOpen) {
+      return;
+    }
+
+    function handleViewportChange() {
+      updatePalettePopoverPosition();
+    }
+
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [isPaletteOpen]);
 
   useEffect(() => {
     if (!pageId || !hydratedRef.current) {
       return;
     }
 
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        setSaveState("Сохраняем...");
-        await updatePage(pageId, {
-          title,
-          paperType,
-          paperColor,
-          layout,
-        });
-        await saveTextElement(pageId, text);
-        await replaceDrawingStrokes(
-          pageId,
-          strokes.map((stroke) => ({
-            ...stroke,
-            pageId,
-          })),
-        );
+    if (saveTimeoutRef.current !== null) {
+      window.clearTimeout(saveTimeoutRef.current);
+    }
 
-        setPage((currentPage) =>
-          currentPage
-            ? {
-                ...currentPage,
-                title,
-                paperType,
-                paperColor,
-                layout,
-                updatedAt: new Date().toISOString(),
-              }
-            : currentPage,
-        );
-        setSaveState("Все изменения сохранены");
-      } catch (error) {
-        console.error("Autosave failed", error);
-        setSaveState("Ошибка сохранения");
+    saveTimeoutRef.current = window.setTimeout(() => {
+      saveTimeoutRef.current = null;
+      void persistPageChanges();
+    }, AUTOSAVE_DELAY_MS);
+
+    return () => {
+      if (saveTimeoutRef.current !== null) {
+        window.clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
       }
-    }, 450);
-
-    return () => window.clearTimeout(timeoutId);
+    };
   }, [layout, pageId, paperColor, paperType, strokes, text, title]);
+
+  async function persistPageChanges() {
+    if (!pageId || !hydratedRef.current) {
+      return;
+    }
+
+    if (saveTimeoutRef.current !== null) {
+      window.clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+
+    try {
+      await updatePage(pageId, {
+        title,
+        paperType,
+        paperColor,
+        layout,
+      });
+      await saveTextElement(pageId, text);
+      await replaceDrawingStrokes(
+        pageId,
+        strokes.map((stroke) => ({
+          ...stroke,
+          pageId,
+        })),
+      );
+
+      setPage((currentPage) =>
+        currentPage
+          ? {
+              ...currentPage,
+              title,
+              paperType,
+              paperColor,
+              layout,
+              updatedAt: new Date().toISOString(),
+            }
+          : currentPage,
+      );
+      setSaveState(SAVE_STATE_SAVED);
+    } catch (error) {
+      console.error("Autosave failed", error);
+      setSaveState(SAVE_STATE_ERROR);
+    }
+  }
+
+  function handleManualSave() {
+    setSaveState((current) => (current === SAVE_STATE_ERROR ? current : SAVE_STATE_PENDING));
+    void persistPageChanges();
+  }
 
   async function handleImagesChange(event: ChangeEvent<HTMLInputElement>) {
     if (!pageId || !event.target.files?.length) {
@@ -409,12 +515,66 @@ export function PageEditorPage() {
     fileInputRef.current?.click();
   }
 
+  function updatePalettePopoverPosition() {
+    const bounds = paletteButtonRef.current?.getBoundingClientRect();
+
+    if (!bounds) {
+      return;
+    }
+
+    setPalettePopoverPosition({
+      top: Math.max(12, bounds.bottom - 178),
+      left: bounds.right + 12,
+    });
+  }
+
+  function openFloatingColorPicker() {
+    if (isEraserActive) {
+      return;
+    }
+
+    updatePalettePopoverPosition();
+    setIsPaletteOpen((current) => !current);
+  }
+
+  function handlePaletteColorSelect(color: string) {
+    setToolColor(color);
+    setIsPaletteOpen(false);
+  }
+
+  function handleGoToNotebooks() {
+    navigate("/", { replace: true });
+  }
+
   function handleToolSelect(toolId: ToolPresetId) {
+    if (toolId === "eraser") {
+      setActiveSection(null);
+      setIsKeyboardTextMode(false);
+      setActiveElementId(null);
+      setSwipePreviewDirection("");
+      setSwipePreviewProgress(0);
+      textAreaRef.current?.blur();
+    }
+
     setSelectedToolId(toolId);
   }
 
   function toggleEraser() {
+    setActiveSection(null);
+    setIsKeyboardTextMode(false);
+    setActiveElementId(null);
+    setSwipePreviewDirection("");
+    setSwipePreviewProgress(0);
+    textAreaRef.current?.blur();
     setSelectedToolId((currentToolId) => (currentToolId === "eraser" ? lastDrawingToolId : "eraser"));
+  }
+
+  function handleEraserWidthChange(nextWidth: number) {
+    setEraserWidth(nextWidth);
+
+    if (isEraserActive) {
+      setToolWidth(nextWidth);
+    }
   }
 
   function clearDrawingLayer() {
@@ -496,7 +656,7 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchStart(event: TouchEvent<HTMLDivElement>) {
-    if (isDeletingPage || isOverlayTarget(event.target) || event.touches.length !== 1) {
+    if (isDeletingPage || isPenInteractionLocked() || isOverlayTarget(event.target) || event.touches.length !== 1) {
       touchStartXRef.current = null;
       touchStartYRef.current = null;
       setSwipePreviewDirection("");
@@ -509,7 +669,7 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchMove(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage) {
+    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage || isPenInteractionLocked()) {
       return;
     }
 
@@ -532,7 +692,7 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchEnd(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage) {
+    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage || isPenInteractionLocked()) {
       return;
     }
 
@@ -569,13 +729,42 @@ export function PageEditorPage() {
     };
   }
 
+  function markPenInteraction() {
+    recentPenInteractionUntilRef.current = Date.now() + 700;
+  }
+
+  function isPenInteractionLocked() {
+    return drawingPointerIdRef.current !== null || recentPenInteractionUntilRef.current > Date.now();
+  }
+
+  function enableKeyboardTextMode() {
+    const textArea = textAreaRef.current;
+
+    setIsKeyboardTextMode(true);
+
+    if (!textArea) {
+      return;
+    }
+
+    textArea.readOnly = false;
+    textArea.setAttribute("inputmode", "text");
+    window.requestAnimationFrame(() => {
+      textArea.focus({ preventScroll: true });
+    });
+  }
+
   function handleTextLayerPointerDown(event: ReactPointerEvent<HTMLTextAreaElement>) {
     setActiveElementId(null);
 
     if (event.pointerType === "pen") {
       event.preventDefault();
+      setIsKeyboardTextMode(false);
+      textAreaRef.current?.setAttribute("inputmode", "none");
       textAreaRef.current?.blur();
+      return;
     }
+
+    enableKeyboardTextMode();
   }
 
   function handleTextLayerPointerMoveCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
@@ -587,6 +776,14 @@ export function PageEditorPage() {
   function handleTextLayerPointerUpCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
     if (event.pointerType === "pen") {
       event.preventDefault();
+    }
+  }
+
+  function handleTextLayerBlur() {
+    setIsKeyboardTextMode(false);
+    textAreaRef.current?.setAttribute("inputmode", "none");
+    if (textAreaRef.current) {
+      textAreaRef.current.readOnly = true;
     }
   }
 
@@ -607,6 +804,7 @@ export function PageEditorPage() {
     }
 
     if (!canDraw) {
+      setIsKeyboardTextMode(false);
       setActiveElementId(null);
       return;
     }
@@ -618,8 +816,12 @@ export function PageEditorPage() {
     }
 
     event.preventDefault();
+    if (event.pointerType === "pen") {
+      markPenInteraction();
+    }
     drawingPointerIdRef.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
+    setIsKeyboardTextMode(false);
     textAreaRef.current?.blur();
     setActiveElementId(null);
     drawingCanvasRef.current?.beginStroke(point);
@@ -637,6 +839,9 @@ export function PageEditorPage() {
     }
 
     event.preventDefault();
+    if (event.pointerType === "pen") {
+      markPenInteraction();
+    }
     drawingCanvasRef.current?.appendPoint(point);
   }
 
@@ -649,6 +854,9 @@ export function PageEditorPage() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
 
+    if (event.pointerType === "pen") {
+      markPenInteraction();
+    }
     drawingPointerIdRef.current = null;
     drawingCanvasRef.current?.endStroke();
   }
@@ -661,18 +869,35 @@ export function PageEditorPage() {
           {toolPreset.label} • {strokeStyleLabels[toolPreset.strokeStyle]}
         </div>
         <ToolPresetPicker selectedId={selectedToolId} onSelect={handleToolSelect} categories={categories} />
-        <label className="stack">
-          <span>Цвет</span>
-          <input className="color-input" type="color" value={toolColor} onChange={(event) => setToolColor(event.target.value)} />
-        </label>
-        <label className="stack">
-          <span>Толщина: {toolWidth.toFixed(1)}</span>
-          <input className="range" type="range" min={1} max={24} step={0.5} value={toolWidth} onChange={(event) => setToolWidth(Number(event.target.value))} />
-        </label>
-        <label className="stack">
-          <span>Прозрачность: {Math.round(toolOpacity * 100)}%</span>
-          <input className="range" type="range" min={0.1} max={1} step={0.05} value={toolOpacity} onChange={(event) => setToolOpacity(Number(event.target.value))} />
-        </label>
+        {isEraserActive ? (
+          <label className="stack">
+            <span>Размер ластика: {toolWidth.toFixed(1)}</span>
+            <input
+              className="range"
+              type="range"
+              min={6}
+              max={80}
+              step={1}
+              value={toolWidth}
+              onChange={(event) => handleEraserWidthChange(Number(event.target.value))}
+            />
+          </label>
+        ) : (
+          <>
+            <label className="stack">
+              <span>Цвет</span>
+              <input className="color-input" type="color" value={toolColor} onChange={(event) => setToolColor(event.target.value)} />
+            </label>
+            <label className="stack">
+              <span>Толщина: {toolWidth.toFixed(1)}</span>
+              <input className="range" type="range" min={1} max={24} step={0.5} value={toolWidth} onChange={(event) => setToolWidth(Number(event.target.value))} />
+            </label>
+            <label className="stack">
+              <span>Прозрачность: {Math.round(toolOpacity * 100)}%</span>
+              <input className="range" type="range" min={0.1} max={1} step={0.05} value={toolOpacity} onChange={(event) => setToolOpacity(Number(event.target.value))} />
+            </label>
+          </>
+        )}
         <Button variant="ghost" onClick={clearDrawingLayer}>
           Очистить слой
         </Button>
@@ -703,6 +928,7 @@ export function PageEditorPage() {
   const sheetClassName = [
     "editor-sheet",
     flipDirection ? `editor-sheet--flip-${flipDirection}` : "",
+    isEraserActive ? "editor-sheet--eraser" : "",
     isDeletingPage ? "editor-sheet--deleting" : "",
   ]
     .filter(Boolean)
@@ -815,36 +1041,71 @@ export function PageEditorPage() {
 
   return (
     <section className="page-section editor-screen">
-      <div className="breadcrumbs">
-        <Link to="/">Мои блокноты</Link>
-        {notebook ? (
-          <>
+      <div className="editor-screen__topbar">
+        <div className="breadcrumbs">
+          <button type="button" className="breadcrumbs__button" onClick={handleGoToNotebooks}>
+            Мои блокноты
+          </button>
+          {notebook ? (
+            <>
             <span>/</span>
-            <Link to={`/notebooks/${notebook.id}/manage`}>{notebook.title}</Link>
+            <Link to={`/notebooks/${notebook.id}/manage`} state={{ sourcePageId: page?.id }}>
+              {notebook.title}
+            </Link>
           </>
         ) : null}
+        </div>
+        <div className="editor-screen__save-action">
+          <Button type="button" onClick={handleManualSave}>
+            Сохранить
+          </Button>
+        </div>
+        <div className="editor-screen__status">
+          <span className={`editor-sheet__status-pill ${saveStateClassName}`}>{saveState}</span>
+        </div>
       </div>
 
       <div className={`editor-workbench ${activeSection ? "editor-workbench--sidebar" : "editor-workbench--compact"}`}>
         <aside className="editor-rail panel">
-          {sidebarSections.map((section) => (
+          <div className="editor-rail__tools">
+            {sidebarSections.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                className={`rail-button ${activeSection === section.id ? "rail-button--active" : ""}`}
+                onClick={() => handleSectionToggle(section.id)}
+                aria-label={section.label}
+                title={section.label}
+              >
+                <span className="rail-button__icon" aria-hidden="true">
+                  {section.icon}
+                </span>
+                <span className="sr-only">{section.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div ref={paletteButtonRef} className="editor-rail__palette">
             <button
-              key={section.id}
               type="button"
-              className={`rail-button ${activeSection === section.id ? "rail-button--active" : ""}`}
-              onClick={() => handleSectionToggle(section.id)}
-              aria-label={section.label}
-              title={section.label}
+              className={`rail-button rail-button--palette ${isEraserActive ? "rail-button--disabled" : ""}`}
+              onClick={openFloatingColorPicker}
+              aria-label="Изменить цвет пера"
+              title={isEraserActive ? "Сначала выключите ластик" : "Изменить цвет пера"}
+              aria-expanded={isPaletteOpen}
+              disabled={isEraserActive}
             >
+              <span className="rail-button__palette-swatch" style={{ background: toolColor }} aria-hidden="true" />
               <span className="rail-button__icon" aria-hidden="true">
-                {section.icon}
+                Ц
               </span>
-              <span className="sr-only">{section.label}</span>
+              <span className="sr-only">Изменить цвет пера</span>
             </button>
-          ))}
+
+          </div>
         </aside>
 
-        {activeSection && activeSidebarSection ? (
+        {activeSection && activeSidebarSection && !isEraserActive ? (
           <aside className="editor-sidebar panel">
             <div className="editor-sidebar__header">
               <div className="editor-sidebar__badge">
@@ -870,14 +1131,12 @@ export function PageEditorPage() {
                 "--page-swipe-progress": swipePreviewProgress.toFixed(3),
                 "--page-delete-x": `${pageDeleteOffset.x.toFixed(1)}px`,
                 "--page-delete-y": `${pageDeleteOffset.y.toFixed(1)}px`,
+                "--editor-sheet-text-left":
+                  notebook?.bindingType === "rings" || notebook?.bindingType === "spiral" ? "68px" : "36px",
               } as CSSProperties
             }
           >
             <div className="editor-sheet__inner">
-              <div className="editor-sheet__status">
-                <span className="editor-sheet__status-pill editor-sheet__status-pill--save">{saveState}</span>
-              </div>
-
               <div
                 ref={sheetPageRef}
                 className="editor-sheet__page"
@@ -890,6 +1149,10 @@ export function PageEditorPage() {
                 onPointerUpCapture={finishSheetStroke}
                 onPointerCancelCapture={finishSheetStroke}
               >
+                {notebook && (notebook.bindingType === "rings" || notebook.bindingType === "spiral") ? (
+                  <NotebookBinding bindingType={notebook.bindingType} className="editor-sheet__binding" />
+                ) : null}
+
                 {sheetMotionDirection ? (
                   <div
                     className={`editor-sheet__flip-curl editor-sheet__flip-curl--${sheetMotionDirection} ${
@@ -901,18 +1164,21 @@ export function PageEditorPage() {
 
                 <textarea
                   ref={textAreaRef}
-                  className="textarea textarea--stage editor-sheet__textarea"
+                  className={`textarea textarea--stage editor-sheet__textarea ${
+                    isKeyboardTextMode ? "editor-sheet__textarea--typing" : "editor-sheet__textarea--idle"
+                  }`}
                   value={text}
                   onChange={(event) => setText(event.target.value)}
                   onPointerDownCapture={handleTextLayerPointerDown}
                   onPointerMoveCapture={handleTextLayerPointerMoveCapture}
                   onPointerUpCapture={handleTextLayerPointerUpCapture}
                   onPointerCancelCapture={handleTextLayerPointerUpCapture}
-                  onPointerDown={handleTextLayerPointerDown}
+                  onBlur={handleTextLayerBlur}
+                  readOnly={!isKeyboardTextMode}
                   spellCheck={false}
                   autoCorrect="off"
                   autoCapitalize="off"
-                  placeholder="Пишите заметки, маршруты, идеи и всё, что нужно сохранить на этом листе..."
+                  inputMode={isKeyboardTextMode ? "text" : "none"}
                 />
 
                 <DrawingCanvas
@@ -999,6 +1265,23 @@ export function PageEditorPage() {
                     {"\u{1F5D1}"}
                   </button>
                 </div>
+
+                {isEraserActive ? (
+                  <div className="editor-sheet__left-tools">
+                    <div className="eraser-size-rail" aria-label="Размер ластика">
+                      <span className="eraser-size-rail__value">{Math.round(toolWidth)}</span>
+                      <input
+                        className="eraser-size-rail__range"
+                        type="range"
+                        min={6}
+                        max={80}
+                        step={1}
+                        value={toolWidth}
+                        onChange={(event) => handleEraserWidthChange(Number(event.target.value))}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           </section>
@@ -1007,6 +1290,36 @@ export function PageEditorPage() {
 
       <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={handleImagesChange} />
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleFilesChange} />
+      {isPaletteOpen
+        ? createPortal(
+            <div
+              ref={palettePopoverRef}
+              className="palette-popover"
+              role="dialog"
+              aria-label="Выбор цвета пера"
+              style={{ top: `${palettePopoverPosition.top}px`, left: `${palettePopoverPosition.left}px` }}
+            >
+              <div className="palette-popover__swatches">
+                {quickPaletteColors.map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`palette-popover__swatch ${toolColor.toLowerCase() === color.toLowerCase() ? "palette-popover__swatch--active" : ""}`}
+                    style={{ background: color }}
+                    onClick={() => handlePaletteColorSelect(color)}
+                    aria-label={`Выбрать цвет ${color}`}
+                  />
+                ))}
+              </div>
+
+              <label className="palette-popover__custom">
+                <span>Свой цвет</span>
+                <input type="color" value={toolColor} onChange={(event) => handlePaletteColorSelect(event.target.value)} />
+              </label>
+            </div>,
+            document.body,
+          )
+        : null}
     </section>
   );
 }

@@ -1,11 +1,11 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { getTextElement } from "@/features/editor/api/editor";
 import { FileAttachmentList } from "@/features/editor/components/FileAttachmentList";
 import { listNotebookAttachments, attachFilesToNotebook, getNotebook, updateNotebook } from "@/features/notebooks/api/notebooks";
 import { CreateNotebookModal } from "@/features/notebooks/components/CreateNotebookModal";
 import { NotebookBinding } from "@/features/notebooks/components/NotebookBinding";
-import { createPage, listPages } from "@/features/pages/api/pages";
+import { createPage, listPages, updatePage } from "@/features/pages/api/pages";
 import { getPaperPreset } from "@/shared/config/paperPresets";
 import { getToolPreset } from "@/shared/config/toolPresets";
 import { notebookTypePresets } from "@/shared/config/notebookPresets";
@@ -22,12 +22,20 @@ interface PageCardData extends Page {
 export function NotebookPage() {
   const { notebookId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [title, setTitle] = useState("");
   const [notebook, setNotebook] = useState<Notebook | null>(null);
   const [pages, setPages] = useState<PageCardData[]>([]);
   const [attachments, setAttachments] = useState<NotebookAttachment[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "missing">("loading");
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const sourcePageId =
+    typeof location.state === "object" &&
+    location.state &&
+    "sourcePageId" in location.state &&
+    typeof location.state.sourcePageId === "string"
+      ? location.state.sourcePageId
+      : null;
 
   const coverImageUrl = useAssetObjectUrl(notebook?.coverImageAssetId);
 
@@ -202,6 +210,7 @@ export function NotebookPage() {
         onClose={() => setIsEditOpen(false)}
         titleText="Изменить блокнот"
         submitText="Сохранить"
+        closeDelayMs={90}
         initialValues={{
           title: notebook.title,
           color: notebook.color,
@@ -216,6 +225,20 @@ export function NotebookPage() {
         }}
         onCreate={async (input) => {
           const updatedNotebook = await updateNotebook(notebook.id, input);
+
+          if (sourcePageId) {
+            const sourcePage = pages.find((pageItem) => pageItem.id === sourcePageId);
+
+            if (sourcePage) {
+              await updatePage(sourcePageId, {
+                title: sourcePage.title,
+                paperType: input.paperType,
+                paperColor: input.paperColor,
+                layout: sourcePage.layout,
+              });
+            }
+          }
+
           setNotebook(updatedNotebook);
           await load();
           return updatedNotebook;

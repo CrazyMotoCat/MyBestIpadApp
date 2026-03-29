@@ -2,12 +2,17 @@
   "name": "MyBestIpadApp",
   "short_name": "MyBestIpad",
   "description": "Личный офлайн-блокнот для iPad в формате PWA.",
+  "id": "/",
+  "lang": "ru",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
   "background_color": "#05070d",
   "theme_color": "#05070d",
   "orientation": "any",
+  "prefer_related_applications": false,
+  "categories": ["productivity", "utilities"],
   "icons": [
     {
       "src": "/icons/app-icon.svg",
