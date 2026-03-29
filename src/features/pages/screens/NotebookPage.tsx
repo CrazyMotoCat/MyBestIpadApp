@@ -1,0 +1,225 @@
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { getTextElement } from "@/features/editor/api/editor";
+import { FileAttachmentList } from "@/features/editor/components/FileAttachmentList";
+import { listNotebookAttachments, attachFilesToNotebook, getNotebook, updateNotebook } from "@/features/notebooks/api/notebooks";
+import { CreateNotebookModal } from "@/features/notebooks/components/CreateNotebookModal";
+import { NotebookBinding } from "@/features/notebooks/components/NotebookBinding";
+import { createPage, listPages } from "@/features/pages/api/pages";
+import { getPaperPreset } from "@/shared/config/paperPresets";
+import { getToolPreset } from "@/shared/config/toolPresets";
+import { notebookTypePresets } from "@/shared/config/notebookPresets";
+import { buildPaperStyle } from "@/shared/lib/paper";
+import { useAssetObjectUrl } from "@/shared/lib/useAssetObjectUrl";
+import { Notebook, NotebookAttachment, Page } from "@/shared/types/models";
+import { Button } from "@/shared/ui/Button";
+import { Panel } from "@/shared/ui/Panel";
+
+interface PageCardData extends Page {
+  preview: string;
+}
+
+export function NotebookPage() {
+  const { notebookId } = useParams();
+  const navigate = useNavigate();
+  const [title, setTitle] = useState("");
+  const [notebook, setNotebook] = useState<Notebook | null>(null);
+  const [pages, setPages] = useState<PageCardData[]>([]);
+  const [attachments, setAttachments] = useState<NotebookAttachment[]>([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "missing">("loading");
+  const [isEditOpen, setIsEditOpen] = useState(false);
+
+  const coverImageUrl = useAssetObjectUrl(notebook?.coverImageAssetId);
+
+  async function load() {
+    if (!notebookId) {
+      setStatus("missing");
+      return;
+    }
+
+    setStatus("loading");
+    const notebookRecord = await getNotebook(notebookId);
+
+    if (!notebookRecord) {
+      setNotebook(null);
+      setPages([]);
+      setStatus("missing");
+      return;
+    }
+
+    const pageRecords = await listPages(notebookId);
+    const pageCards = await Promise.all(
+      pageRecords.map(async (page) => ({
+        ...page,
+        preview: (await getTextElement(page.id))?.content.slice(0, 140) || "Пустая страница",
+      })),
+    );
+
+    setNotebook(notebookRecord);
+    setPages(pageCards);
+    setAttachments(await listNotebookAttachments(notebookId));
+    setStatus("ready");
+  }
+
+  useEffect(() => {
+    void load();
+  }, [notebookId]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!notebookId) {
+      return;
+    }
+
+    const normalizedTitle = title.trim();
+    const page = await createPage(notebookId, normalizedTitle || `Новая страница ${pages.length + 1}`);
+    setTitle("");
+    await load();
+    navigate(`/pages/${page.id}`);
+  }
+
+  async function handleFilesChange(event: ChangeEvent<HTMLInputElement>) {
+    if (!notebookId || !event.target.files?.length) {
+      return;
+    }
+
+    await attachFilesToNotebook(notebookId, Array.from(event.target.files));
+    event.target.value = "";
+    await load();
+  }
+
+  if (status === "loading") {
+    return (
+      <section className="page-section">
+        <Panel className="empty-state">Загружаем блокнот...</Panel>
+      </section>
+    );
+  }
+
+  if (!notebook) {
+    return (
+      <section className="page-section">
+        <Panel className="empty-state">
+          Блокнот не найден. <Link to="/">Вернуться к списку</Link>
+        </Panel>
+      </section>
+    );
+  }
+
+  const notebookTypeLabel =
+    notebookTypePresets.find((preset) => preset.id === notebook.notebookType)?.label ?? notebook.notebookType;
+  const paperLabel = getPaperPreset(notebook.defaultPaperType).label;
+  const toolLabel = getToolPreset(notebook.defaultTool).label;
+  const heroCoverStyle =
+    notebook.coverMode === "custom" && coverImageUrl
+      ? {
+          backgroundImage: `${notebook.coverBackground}, linear-gradient(180deg, rgba(7,9,15,.34), rgba(7,9,15,.54)), url("${coverImageUrl}")`,
+          backgroundSize: "cover, cover, cover",
+          backgroundPosition: "center, center, center",
+        }
+      : { background: notebook.coverBackground };
+
+  return (
+    <section className="page-section notebook-screen">
+      <div className="breadcrumbs">
+        <Link to="/">Мои блокноты</Link>
+        <span>/</span>
+        <span>{notebook.title}</span>
+      </div>
+
+      <header className="notebook-hero panel">
+        <div className="notebook-hero__cover" style={heroCoverStyle}>
+          <NotebookBinding bindingType={notebook.bindingType} />
+        </div>
+        <div className="stack">
+          <h1 className="notebook-hero__title">{notebook.title}</h1>
+          <p className="notebook-hero__subtitle">
+            Тип: {notebookTypeLabel} • Бумага: {paperLabel} • Инструмент: {toolLabel}
+          </p>
+          <div className="inline-actions">
+            <Button variant="ghost" onClick={() => setIsEditOpen(true)}>
+              Изменить оформление
+            </Button>
+          </div>
+          <form className="inline-form" onSubmit={handleSubmit}>
+            <input
+              className="input"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Название новой страницы"
+            />
+            <Button type="submit">Создать страницу</Button>
+          </form>
+        </div>
+      </header>
+
+      <div className="page-columns">
+        <Panel className="stack">
+          <div className="section-head">
+            <div>
+              <h2>Страницы</h2>
+              <p>Новые страницы сразу наследуют бумагу, цвет листа, стиль и визуальную основу блокнота.</p>
+            </div>
+          </div>
+
+          <div className="grid grid--pages">
+            {pages.length === 0 ? <div className="empty-inline">Страниц пока нет. Создайте первую.</div> : null}
+
+            {pages.map((page) => (
+              <Link key={page.id} to={`/pages/${page.id}`} className="page-link-card">
+                <div className="page-card__preview" style={buildPaperStyle(page.paperType, page.paperColor)} />
+                <div className="stack">
+                  <strong>
+                    {page.isBookmarked ? "★ " : ""}
+                    {page.title}
+                  </strong>
+                  <span className="muted">{page.preview}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel className="stack">
+          <div className="section-head">
+            <div>
+              <h2>Файлы блокнота</h2>
+              <p>Вложения блокнота сохраняются локально и доступны после перезагрузки.</p>
+            </div>
+          </div>
+          <label className="upload-box">
+            <span>Добавить файлы в блокнот</span>
+            <input type="file" multiple onChange={handleFilesChange} />
+          </label>
+          <FileAttachmentList items={attachments} />
+        </Panel>
+      </div>
+
+      <CreateNotebookModal
+        isOpen={isEditOpen}
+        onClose={() => setIsEditOpen(false)}
+        titleText="Изменить блокнот"
+        submitText="Сохранить"
+        initialValues={{
+          title: notebook.title,
+          color: notebook.color,
+          style: notebook.style,
+          notebookType: notebook.notebookType,
+          paperType: notebook.defaultPaperType,
+          paperColor: notebook.defaultPaperColor,
+          defaultTool: notebook.defaultTool,
+          coverPreset: notebook.coverPreset,
+          bindingType: notebook.bindingType,
+          coverMode: notebook.coverMode,
+        }}
+        onCreate={async (input) => {
+          const updatedNotebook = await updateNotebook(notebook.id, input);
+          setNotebook(updatedNotebook);
+          await load();
+          return updatedNotebook;
+        }}
+      />
+    </section>
+  );
+}
