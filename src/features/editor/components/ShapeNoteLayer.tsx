@@ -37,6 +37,10 @@ interface PendingLongPress {
 const LONG_PRESS_MS = 260;
 const LONG_PRESS_MOVE_TOLERANCE = 12;
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function isPointInRect(x: number, y: number, rect: DOMRect | null) {
   if (!rect) {
     return false;
@@ -47,6 +51,10 @@ function isPointInRect(x: number, y: number, rect: DOMRect | null) {
 
 function hasMovedTooFar(startX: number, startY: number, currentX: number, currentY: number) {
   return Math.abs(currentX - startX) > LONG_PRESS_MOVE_TOLERANCE || Math.abs(currentY - startY) > LONG_PRESS_MOVE_TOLERANCE;
+}
+
+function getLayerBounds(target: HTMLElement) {
+  return target.closest(".shape-layer")?.getBoundingClientRect() ?? null;
 }
 
 export function ShapeNoteLayer({
@@ -115,9 +123,32 @@ export function ShapeNoteLayer({
 
   function activateItem(item: ShapeNoteElement) {
     const promotedItem = onInteractStart(item);
-    draftItemsRef.current = items.map((currentItem) => (currentItem.id === promotedItem.id ? promotedItem : currentItem));
+    draftItemsRef.current = draftItemsRef.current.map((currentItem) =>
+      currentItem.id === promotedItem.id ? promotedItem : currentItem,
+    );
     setDraftItems(draftItemsRef.current);
     return promotedItem;
+  }
+
+  function handleTextChange(itemId: string, value: string) {
+    updateDraftItems((current) => {
+      const nextItems = current.map((item) => (item.id === itemId ? { ...item, text: value } : item));
+      const changedItem = nextItems.find((item) => item.id === itemId);
+
+      if (changedItem) {
+        onChange(changedItem);
+      }
+
+      return nextItems;
+    });
+  }
+
+  function handleTextBlur(itemId: string) {
+    const finalItem = draftItemsRef.current.find((item) => item.id === itemId);
+
+    if (finalItem) {
+      onCommit(finalItem);
+    }
   }
 
   function handlePressStart(event: PointerEvent<HTMLDivElement>, item: ShapeNoteElement) {
@@ -163,6 +194,7 @@ export function ShapeNoteLayer({
     if (dragState && dragState.id === item.id) {
       const deltaX = event.clientX - dragState.startX;
       const deltaY = event.clientY - dragState.startY;
+      const layerBounds = getLayerBounds(event.currentTarget);
 
       updateDraftItems((current) =>
         current.map((currentItem) => {
@@ -171,17 +203,21 @@ export function ShapeNoteLayer({
           }
 
           if (dragState.mode === "move") {
+            const maxX = Math.max(0, (layerBounds?.width ?? Number.POSITIVE_INFINITY) - currentItem.width);
+            const maxY = Math.max(0, (layerBounds?.height ?? Number.POSITIVE_INFINITY) - currentItem.height);
             return {
               ...currentItem,
-              x: Math.max(0, dragState.originX + deltaX),
-              y: Math.max(0, dragState.originY + deltaY),
+              x: clamp(dragState.originX + deltaX, 0, maxX),
+              y: clamp(dragState.originY + deltaY, 0, maxY),
             };
           }
 
+          const maxWidth = Math.max(140, (layerBounds?.width ?? dragState.originWidth + deltaX) - currentItem.x);
+          const maxHeight = Math.max(100, (layerBounds?.height ?? dragState.originHeight + deltaY) - currentItem.y);
           return {
             ...currentItem,
-            width: Math.max(140, dragState.originWidth + deltaX),
-            height: Math.max(100, dragState.originHeight + deltaY),
+            width: clamp(dragState.originWidth + deltaX, 140, maxWidth),
+            height: clamp(dragState.originHeight + deltaY, 100, maxHeight),
           };
         }),
       );
@@ -268,8 +304,8 @@ export function ShapeNoteLayer({
             className="shape-note__textarea"
             value={item.text}
             onPointerDown={(event) => event.stopPropagation()}
-            onChange={(event) => onChange({ ...item, text: event.target.value })}
-            onBlur={() => onCommit(item)}
+            onChange={(event) => handleTextChange(item.id, event.target.value)}
+            onBlur={() => handleTextBlur(item.id)}
             placeholder="Текст вставки"
           />
           <div

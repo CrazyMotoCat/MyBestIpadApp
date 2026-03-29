@@ -53,6 +53,8 @@ const strokeStyleLabels: Record<ToolStrokeStyle, string> = {
   eraser: "ластик",
 };
 
+const PAGE_DELETE_ANIMATION_MS = 340;
+
 function getMaxElementZIndex(
   images: ImagePageElement[],
   files: FileAttachmentPageElement[],
@@ -86,6 +88,7 @@ export function PageEditorPage() {
   const hydratedRef = useRef(false);
   const drawingPointerIdRef = useRef<number | null>(null);
   const zIndexCounterRef = useRef(1);
+  const deleteTimeoutRef = useRef<number | null>(null);
 
   const [notebook, setNotebook] = useState<Notebook | null>(null);
   const [page, setPage] = useState<Page | null>(null);
@@ -116,6 +119,8 @@ export function PageEditorPage() {
   const [isObjectDragging, setIsObjectDragging] = useState(false);
   const [isTrashHover, setIsTrashHover] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
+  const [isDeletingPage, setIsDeletingPage] = useState(false);
+  const [pageDeleteOffset, setPageDeleteOffset] = useState({ x: 0, y: 0 });
 
   const toolPreset = getToolPreset(selectedToolId);
   const activeSidebarSection = sidebarSections.find((section) => section.id === activeSection) ?? null;
@@ -152,6 +157,8 @@ export function PageEditorPage() {
     setFiles(bundle.files);
     setShapes(bundle.shapes);
     setActiveElementId(null);
+    setIsDeletingPage(false);
+    setPageDeleteOffset({ x: 0, y: 0 });
     zIndexCounterRef.current = getMaxElementZIndex(bundle.images, bundle.files, bundle.shapes) + 1;
 
     const initialTool = notebookRecord?.defaultTool ?? "ballpoint";
@@ -190,6 +197,14 @@ export function PageEditorPage() {
       setLastDrawingToolId(selectedToolId);
     }
   }, [selectedToolId]);
+
+  useEffect(() => {
+    return () => {
+      if (deleteTimeoutRef.current !== null) {
+        window.clearTimeout(deleteTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!pageId || !hydratedRef.current) {
@@ -247,6 +262,7 @@ export function PageEditorPage() {
 
     event.target.value = "";
     await loadPage(pageId);
+    setActiveSection(null);
   }
 
   async function handleFilesChange(event: ChangeEvent<HTMLInputElement>) {
@@ -260,6 +276,7 @@ export function PageEditorPage() {
 
     event.target.value = "";
     await loadPage(pageId);
+    setActiveSection(null);
   }
 
   async function handleInsertShape(shapePreset: Parameters<typeof addShapeNote>[1]["shapePreset"]) {
@@ -277,6 +294,7 @@ export function PageEditorPage() {
     const promotedShape = { ...shape, zIndex: zIndexCounterRef.current++ };
     setShapes((current) => [...current, promotedShape]);
     setActiveElementId(promotedShape.id);
+    setActiveSection(null);
     void updateShapeNote(promotedShape);
   }
 
@@ -350,6 +368,25 @@ export function PageEditorPage() {
     return trashButtonRef.current?.getBoundingClientRect() ?? null;
   }
 
+  function calculatePageDeleteOffset() {
+    const pageBounds = sheetPageRef.current?.getBoundingClientRect();
+    const trashBounds = trashButtonRef.current?.getBoundingClientRect();
+
+    if (!pageBounds || !trashBounds) {
+      return { x: 0, y: 140 };
+    }
+
+    const pageCenterX = pageBounds.left + pageBounds.width / 2;
+    const pageCenterY = pageBounds.top + pageBounds.height / 2;
+    const trashCenterX = trashBounds.left + trashBounds.width / 2;
+    const trashCenterY = trashBounds.top + trashBounds.height / 2;
+
+    return {
+      x: trashCenterX - pageCenterX,
+      y: trashCenterY - pageCenterY,
+    };
+  }
+
   async function toggleBookmark() {
     if (!pageId || !page) {
       return;
@@ -385,41 +422,48 @@ export function PageEditorPage() {
   }
 
   async function handleDeleteCurrentPage() {
-    if (!page || !notebook || isObjectDragging) {
+    if (!page || !notebook || isObjectDragging || isDeletingPage) {
       return;
     }
 
-    const shouldDelete = window.confirm(`Удалить лист "${page.title}"?`);
+    setSwipePreviewDirection("");
+    setSwipePreviewProgress(0);
+    setFlipDirection("");
+    setPageDeleteOffset(calculatePageDeleteOffset());
+    setIsDeletingPage(true);
 
-    if (!shouldDelete) {
-      return;
-    }
+    deleteTimeoutRef.current = window.setTimeout(() => {
+      deleteTimeoutRef.current = null;
+      void (async () => {
+        const currentIndex = pages.findIndex((item) => item.id === page.id);
+        const nextExistingPage = pages[currentIndex + 1] ?? pages[currentIndex - 1] ?? null;
+        const result = await deletePage(page.id);
 
-    const currentIndex = pages.findIndex((item) => item.id === page.id);
-    const nextExistingPage = pages[currentIndex + 1] ?? pages[currentIndex - 1] ?? null;
-    const result = await deletePage(page.id);
+        if (!result) {
+          setIsDeletingPage(false);
+          return;
+        }
 
-    if (!result) {
-      return;
-    }
+        if (nextExistingPage) {
+          const targetPage =
+            result.remainingPages.find((item) => item.id === nextExistingPage.id) ?? result.remainingPages[0] ?? null;
 
-    if (nextExistingPage) {
-      const targetPage = result.remainingPages.find((item) => item.id === nextExistingPage.id) ?? result.remainingPages[0] ?? null;
+          if (targetPage) {
+            setPages(result.remainingPages);
+            navigate(`/pages/${targetPage.id}`);
+            return;
+          }
+        }
 
-      if (targetPage) {
-        setPages(result.remainingPages);
-        navigate(`/pages/${targetPage.id}`);
-        return;
-      }
-    }
-
-    const replacementPage = await createPage(notebook.id, "Новый лист");
-    setPages([replacementPage]);
-    navigate(`/pages/${replacementPage.id}`);
+        const replacementPage = await createPage(notebook.id, "Новый лист");
+        setPages([replacementPage]);
+        navigate(`/pages/${replacementPage.id}`);
+      })();
+    }, PAGE_DELETE_ANIMATION_MS);
   }
 
   async function triggerFlip(direction: "prev" | "next") {
-    if (!page || !notebook) {
+    if (!page || !notebook || isDeletingPage) {
       return;
     }
 
@@ -452,7 +496,7 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchStart(event: TouchEvent<HTMLDivElement>) {
-    if (isOverlayTarget(event.target) || event.touches.length !== 1) {
+    if (isDeletingPage || isOverlayTarget(event.target) || event.touches.length !== 1) {
       touchStartXRef.current = null;
       touchStartYRef.current = null;
       setSwipePreviewDirection("");
@@ -465,7 +509,7 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchMove(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectDragging) {
+    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage) {
       return;
     }
 
@@ -488,7 +532,7 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchEnd(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectDragging) {
+    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage) {
       return;
     }
 
@@ -525,12 +569,42 @@ export function PageEditorPage() {
     };
   }
 
+  function handleTextLayerPointerDown(event: ReactPointerEvent<HTMLTextAreaElement>) {
+    setActiveElementId(null);
+
+    if (event.pointerType === "pen") {
+      event.preventDefault();
+      textAreaRef.current?.blur();
+    }
+  }
+
+  function handleTextLayerPointerMoveCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
+    if (event.pointerType === "pen") {
+      event.preventDefault();
+    }
+  }
+
+  function handleTextLayerPointerUpCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
+    if (event.pointerType === "pen") {
+      event.preventDefault();
+    }
+  }
+
   function handleSheetPointerDownCapture(event: ReactPointerEvent<HTMLDivElement>) {
-    if (isOverlayTarget(event.target) || isTextTarget(event.target)) {
+    if (isDeletingPage) {
       return;
     }
 
     const canDraw = event.pointerType === "pen" || (event.pointerType === "mouse" && event.altKey);
+    const isTextLayerTarget = isTextTarget(event.target);
+
+    if (isOverlayTarget(event.target)) {
+      return;
+    }
+
+    if (isTextLayerTarget && !canDraw) {
+      return;
+    }
 
     if (!canDraw) {
       setActiveElementId(null);
@@ -629,6 +703,7 @@ export function PageEditorPage() {
   const sheetClassName = [
     "editor-sheet",
     flipDirection ? `editor-sheet--flip-${flipDirection}` : "",
+    isDeletingPage ? "editor-sheet--deleting" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -793,6 +868,8 @@ export function PageEditorPage() {
               {
                 ...buildPaperStyle(paperType, paperColor),
                 "--page-swipe-progress": swipePreviewProgress.toFixed(3),
+                "--page-delete-x": `${pageDeleteOffset.x.toFixed(1)}px`,
+                "--page-delete-y": `${pageDeleteOffset.y.toFixed(1)}px`,
               } as CSSProperties
             }
           >
@@ -827,7 +904,14 @@ export function PageEditorPage() {
                   className="textarea textarea--stage editor-sheet__textarea"
                   value={text}
                   onChange={(event) => setText(event.target.value)}
-                  onPointerDown={() => setActiveElementId(null)}
+                  onPointerDownCapture={handleTextLayerPointerDown}
+                  onPointerMoveCapture={handleTextLayerPointerMoveCapture}
+                  onPointerUpCapture={handleTextLayerPointerUpCapture}
+                  onPointerCancelCapture={handleTextLayerPointerUpCapture}
+                  onPointerDown={handleTextLayerPointerDown}
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="off"
                   placeholder="Пишите заметки, маршруты, идеи и всё, что нужно сохранить на этом листе..."
                 />
 
@@ -904,10 +988,13 @@ export function PageEditorPage() {
                   <button
                     ref={trashButtonRef}
                     type="button"
-                    className={`trash-dropzone ${isObjectDragging ? "trash-dropzone--ready" : ""} ${isTrashHover ? "trash-dropzone--hot" : ""}`}
+                    className={`trash-dropzone ${isObjectDragging ? "trash-dropzone--ready" : ""} ${
+                      isTrashHover ? "trash-dropzone--hot" : ""
+                    } ${isDeletingPage ? "trash-dropzone--consume" : ""}`}
                     aria-label={isObjectDragging ? "Корзина для удаления объекта" : "Удалить текущий лист"}
                     title={isObjectDragging ? "Перетащите объект в корзину" : "Удалить текущий лист"}
                     onClick={() => void handleDeleteCurrentPage()}
+                    disabled={isDeletingPage}
                   >
                     {"\u{1F5D1}"}
                   </button>

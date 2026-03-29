@@ -44,6 +44,10 @@ interface PendingLongPress {
 const LONG_PRESS_MS = 260;
 const LONG_PRESS_MOVE_TOLERANCE = 12;
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function isPointInRect(x: number, y: number, rect: DOMRect | null) {
   if (!rect) {
     return false;
@@ -56,11 +60,13 @@ function hasMovedTooFar(startX: number, startY: number, currentX: number, curren
   return Math.abs(currentX - startX) > LONG_PRESS_MOVE_TOLERANCE || Math.abs(currentY - startY) > LONG_PRESS_MOVE_TOLERANCE;
 }
 
+function getLayerBounds(target: HTMLElement) {
+  return target.closest(".page-media-layer")?.getBoundingClientRect() ?? null;
+}
+
 function ImageElementCard({
   item,
   isActive,
-  onChange,
-  onCommit,
   onContainerPointerDown,
   onContainerPointerMove,
   onContainerPointerUp,
@@ -70,8 +76,6 @@ function ImageElementCard({
 }: {
   item: ImagePageElement;
   isActive: boolean;
-  onChange: (item: ImagePageElement) => void;
-  onCommit: (item: ImagePageElement) => void;
   onContainerPointerDown: (event: PointerEvent<HTMLElement>, item: MediaElement) => void;
   onContainerPointerMove: (event: PointerEvent<HTMLElement>, item: MediaElement) => void;
   onContainerPointerUp: (event: PointerEvent<HTMLElement>, itemId: string) => void;
@@ -98,14 +102,6 @@ function ImageElementCard({
     >
       <div className="page-media__drag" aria-hidden="true" />
       {imageUrl ? <img className="page-media__image" src={imageUrl} alt={item.name} /> : <div className="page-media__placeholder" />}
-      <input
-        className="page-media__caption"
-        value={item.caption}
-        onPointerDown={(event) => event.stopPropagation()}
-        onChange={(event) => onChange({ ...item, caption: event.target.value })}
-        onBlur={() => onCommit(item)}
-        placeholder="Подпись к изображению"
-      />
       <div
         className="page-media__resize"
         onPointerDown={(event) => onResizePointerDown(event, item)}
@@ -120,25 +116,25 @@ function ImageElementCard({
 function FileElementCard({
   item,
   isActive,
-  onChange,
-  onCommit,
   onContainerPointerDown,
   onContainerPointerMove,
   onContainerPointerUp,
   onResizePointerDown,
   onResizePointerMove,
   onResizePointerUp,
+  onCaptionChange,
+  onCaptionBlur,
 }: {
   item: FileAttachmentPageElement;
   isActive: boolean;
-  onChange: (item: FileAttachmentPageElement) => void;
-  onCommit: (item: FileAttachmentPageElement) => void;
   onContainerPointerDown: (event: PointerEvent<HTMLElement>, item: MediaElement) => void;
   onContainerPointerMove: (event: PointerEvent<HTMLElement>, item: MediaElement) => void;
   onContainerPointerUp: (event: PointerEvent<HTMLElement>, itemId: string) => void;
   onResizePointerDown: (event: PointerEvent<HTMLDivElement>, item: MediaElement) => void;
   onResizePointerMove: (event: PointerEvent<HTMLDivElement>, item: MediaElement) => void;
   onResizePointerUp: (event: PointerEvent<HTMLDivElement>, itemId: string) => void;
+  onCaptionChange: (itemId: string, value: string) => void;
+  onCaptionBlur: (itemId: string) => void;
 }) {
   return (
     <article
@@ -169,8 +165,8 @@ function FileElementCard({
         className="page-media__caption"
         value={item.note}
         onPointerDown={(event) => event.stopPropagation()}
-        onChange={(event) => onChange({ ...item, note: event.target.value })}
-        onBlur={() => onCommit(item)}
+        onChange={(event) => onCaptionChange(item.id, event.target.value)}
+        onBlur={() => onCaptionBlur(item.id)}
         placeholder="Заметка к файлу"
       />
       <div
@@ -274,15 +270,40 @@ export function PageMediaLayer({
   function activateItem(item: MediaElement) {
     if (item.type === "image") {
       const promotedItem = onImageInteractStart(item);
-      draftImagesRef.current = images.map((currentItem) => (currentItem.id === promotedItem.id ? promotedItem : currentItem));
+      draftImagesRef.current = draftImagesRef.current.map((currentItem) =>
+        currentItem.id === promotedItem.id ? promotedItem : currentItem,
+      );
       setDraftImages(draftImagesRef.current);
       return promotedItem;
     }
 
     const promotedItem = onFileInteractStart(item);
-    draftFilesRef.current = files.map((currentItem) => (currentItem.id === promotedItem.id ? promotedItem : currentItem));
+    draftFilesRef.current = draftFilesRef.current.map((currentItem) =>
+      currentItem.id === promotedItem.id ? promotedItem : currentItem,
+    );
     setDraftFiles(draftFilesRef.current);
     return promotedItem;
+  }
+
+  function handleFileCaptionChange(itemId: string, value: string) {
+    updateDraftFiles((current) => {
+      const nextItems = current.map((item) => (item.id === itemId ? { ...item, note: value } : item));
+      const changedItem = nextItems.find((item) => item.id === itemId);
+
+      if (changedItem) {
+        onFileChange(changedItem);
+      }
+
+      return nextItems;
+    });
+  }
+
+  function handleFileCaptionBlur(itemId: string) {
+    const finalItem = draftFilesRef.current.find((item) => item.id === itemId);
+
+    if (finalItem) {
+      onFileCommit(finalItem);
+    }
   }
 
   function handlePressStart(event: PointerEvent<HTMLElement>, item: MediaElement) {
@@ -328,6 +349,7 @@ export function PageMediaLayer({
     if (dragState && dragState.id === item.id) {
       const deltaX = event.clientX - dragState.startX;
       const deltaY = event.clientY - dragState.startY;
+      const layerBounds = getLayerBounds(event.currentTarget);
 
       if (item.type === "image") {
         updateDraftImages((current) =>
@@ -337,17 +359,21 @@ export function PageMediaLayer({
             }
 
             if (dragState.mode === "move") {
+              const maxX = Math.max(0, (layerBounds?.width ?? Number.POSITIVE_INFINITY) - currentItem.width);
+              const maxY = Math.max(0, (layerBounds?.height ?? Number.POSITIVE_INFINITY) - currentItem.height);
               return {
                 ...currentItem,
-                x: Math.max(0, dragState.originX + deltaX),
-                y: Math.max(0, dragState.originY + deltaY),
+                x: clamp(dragState.originX + deltaX, 0, maxX),
+                y: clamp(dragState.originY + deltaY, 0, maxY),
               };
             }
 
+            const maxWidth = Math.max(140, (layerBounds?.width ?? dragState.originWidth + deltaX) - currentItem.x);
+            const maxHeight = Math.max(120, (layerBounds?.height ?? dragState.originHeight + deltaY) - currentItem.y);
             return {
               ...currentItem,
-              width: Math.max(140, dragState.originWidth + deltaX),
-              height: Math.max(120, dragState.originHeight + deltaY),
+              width: clamp(dragState.originWidth + deltaX, 140, maxWidth),
+              height: clamp(dragState.originHeight + deltaY, 120, maxHeight),
             };
           }),
         );
@@ -359,17 +385,21 @@ export function PageMediaLayer({
             }
 
             if (dragState.mode === "move") {
+              const maxX = Math.max(0, (layerBounds?.width ?? Number.POSITIVE_INFINITY) - currentItem.width);
+              const maxY = Math.max(0, (layerBounds?.height ?? Number.POSITIVE_INFINITY) - currentItem.height);
               return {
                 ...currentItem,
-                x: Math.max(0, dragState.originX + deltaX),
-                y: Math.max(0, dragState.originY + deltaY),
+                x: clamp(dragState.originX + deltaX, 0, maxX),
+                y: clamp(dragState.originY + deltaY, 0, maxY),
               };
             }
 
+            const maxWidth = Math.max(220, (layerBounds?.width ?? dragState.originWidth + deltaX) - currentItem.x);
+            const maxHeight = Math.max(92, (layerBounds?.height ?? dragState.originHeight + deltaY) - currentItem.y);
             return {
               ...currentItem,
-              width: Math.max(220, dragState.originWidth + deltaX),
-              height: Math.max(92, dragState.originHeight + deltaY),
+              width: clamp(dragState.originWidth + deltaX, 220, maxWidth),
+              height: clamp(dragState.originHeight + deltaY, 92, maxHeight),
             };
           }),
         );
@@ -446,8 +476,6 @@ export function PageMediaLayer({
           key={item.id}
           item={item}
           isActive={activeItemId === item.id}
-          onChange={onImageChange}
-          onCommit={onImageCommit}
           onContainerPointerDown={handlePressStart}
           onContainerPointerMove={handleMove}
           onContainerPointerUp={finishInteraction}
@@ -461,14 +489,14 @@ export function PageMediaLayer({
           key={item.id}
           item={item}
           isActive={activeItemId === item.id}
-          onChange={onFileChange}
-          onCommit={onFileCommit}
           onContainerPointerDown={handlePressStart}
           onContainerPointerMove={handleMove}
           onContainerPointerUp={finishInteraction}
           onResizePointerDown={beginResize}
           onResizePointerMove={handleMove}
           onResizePointerUp={finishInteraction}
+          onCaptionChange={handleFileCaptionChange}
+          onCaptionBlur={handleFileCaptionBlur}
         />
       ))}
     </div>
