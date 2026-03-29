@@ -1,5 +1,5 @@
 import { CSSProperties, useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { getAppBackgroundPreset } from "@/shared/config/appBackgroundPresets";
 import {
   getAppSettings,
@@ -41,6 +41,8 @@ function buildShellStyle(settings: AppSettings, customBackgroundUrl: string | nu
 export function AppShell() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const customBackgroundUrl = useAssetObjectUrl(settings?.customBackgroundAssetId);
+  const location = useLocation();
+  const isEditorRoute = location.pathname.startsWith("/pages/");
 
   useEffect(() => {
     void getAppSettings().then(setSettings);
@@ -66,11 +68,14 @@ export function AppShell() {
     setSettings(nextSettings);
   }
 
+  const shellClassName = `app-shell ${isEditorRoute ? "app-shell--editor" : ""}`.trim();
+  const shellInnerClassName = `app-shell__inner ${isEditorRoute ? "app-shell__inner--editor" : ""}`.trim();
+
   if (!settings) {
     return (
-      <div className="app-shell">
+      <div className={shellClassName}>
         <div className="app-shell__ambient" />
-        <div className="app-shell__inner">
+        <div className={shellInnerClassName}>
           <div className="screen-loader">Подготавливаем офлайн-среду...</div>
         </div>
       </div>
@@ -78,11 +83,11 @@ export function AppShell() {
   }
 
   return (
-    <div className="app-shell" style={buildShellStyle(settings, customBackgroundUrl)}>
+    <div className={shellClassName} style={buildShellStyle(settings, customBackgroundUrl)}>
       <div className="app-shell__backdrop" />
       <div className="app-shell__ambient" />
       <div className="app-shell__grid" />
-      <div className="app-shell__inner">
+      <div className={shellInnerClassName}>
         <Outlet
           context={{
             settings,

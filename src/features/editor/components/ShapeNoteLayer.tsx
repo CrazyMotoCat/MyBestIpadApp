@@ -4,9 +4,11 @@ import { ShapeNoteElement } from "@/shared/types/models";
 
 interface ShapeNoteLayerProps {
   items: ShapeNoteElement[];
+  activeItemId: string | null;
   onChange: (item: ShapeNoteElement) => void;
   onCommit: (item: ShapeNoteElement) => void;
   onDelete: (id: string) => void;
+  onInteractStart: (item: ShapeNoteElement) => ShapeNoteElement;
   getTrashBounds: () => DOMRect | null;
   onDragStateChange: (isDragging: boolean) => void;
   onTrashHoverChange: (isHoveringTrash: boolean) => void;
@@ -49,9 +51,11 @@ function hasMovedTooFar(startX: number, startY: number, currentX: number, curren
 
 export function ShapeNoteLayer({
   items,
+  activeItemId,
   onChange,
   onCommit,
   onDelete,
+  onInteractStart,
   getTrashBounds,
   onDragStateChange,
   onTrashHoverChange,
@@ -109,20 +113,26 @@ export function ShapeNoteLayer({
     onTrashHoverChange(false);
   }
 
+  function activateItem(item: ShapeNoteElement) {
+    const promotedItem = onInteractStart(item);
+    draftItemsRef.current = items.map((currentItem) => (currentItem.id === promotedItem.id ? promotedItem : currentItem));
+    setDraftItems(draftItemsRef.current);
+    return promotedItem;
+  }
+
   function handlePressStart(event: PointerEvent<HTMLDivElement>, item: ShapeNoteElement) {
     event.stopPropagation();
-    draftItemsRef.current = items;
-    setDraftItems(items);
+    const promotedItem = activateItem(item);
     event.currentTarget.setPointerCapture(event.pointerId);
 
     if (event.pointerType === "mouse") {
-      startDrag(item, "move", event.clientX, event.clientY);
+      startDrag(promotedItem, "move", event.clientX, event.clientY);
       return;
     }
 
     clearLongPress();
     pendingLongPressRef.current = {
-      id: item.id,
+      id: promotedItem.id,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -130,11 +140,11 @@ export function ShapeNoteLayer({
     longPressTimeoutRef.current = window.setTimeout(() => {
       const pending = pendingLongPressRef.current;
 
-      if (!pending || pending.id !== item.id || pending.pointerId !== event.pointerId) {
+      if (!pending || pending.id !== promotedItem.id || pending.pointerId !== event.pointerId) {
         return;
       }
 
-      startDrag(item, "move", pending.startX, pending.startY);
+      startDrag(promotedItem, "move", pending.startX, pending.startY);
       longPressTimeoutRef.current = null;
     }, LONG_PRESS_MS);
   }
@@ -142,10 +152,9 @@ export function ShapeNoteLayer({
   function beginResize(event: PointerEvent<HTMLDivElement>, item: ShapeNoteElement) {
     event.stopPropagation();
     clearLongPress();
-    draftItemsRef.current = items;
-    setDraftItems(items);
+    const promotedItem = activateItem(item);
     event.currentTarget.setPointerCapture(event.pointerId);
-    startDrag(item, "resize", event.clientX, event.clientY);
+    startDrag(promotedItem, "resize", event.clientX, event.clientY);
   }
 
   function handleMove(event: PointerEvent<HTMLDivElement>, item: ShapeNoteElement) {
@@ -238,13 +247,16 @@ export function ShapeNoteLayer({
       {draftItems.map((item) => (
         <div
           key={item.id}
-          className={`shape-note ${item.edgeStyle === "torn" ? "shape-note--torn" : ""}`}
+          className={`shape-note ${item.edgeStyle === "torn" ? "shape-note--torn" : ""} ${
+            activeItemId === item.id ? "shape-note--active" : ""
+          }`}
           style={{
             ...buildPaperStyle(item.paperStyle, item.color),
             left: item.x,
             top: item.y,
             width: item.width,
             height: item.height,
+            zIndex: item.zIndex,
           }}
           onPointerDown={(event) => handlePressStart(event, item)}
           onPointerMove={(event) => handleMove(event, item)}

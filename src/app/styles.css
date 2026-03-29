@@ -3,6 +3,8 @@
   font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
   line-height: 1.5;
   font-weight: 400;
+  --app-shell-padding-top: 32px;
+  --app-shell-padding-bottom: 40px;
   --app-shell-backdrop-image:
     linear-gradient(180deg, rgba(6, 8, 14, 0.62), rgba(6, 8, 14, 0.76)),
     radial-gradient(circle at 20% 20%, rgba(120, 170, 255, 0.18), transparent 28%),
@@ -31,6 +33,7 @@
 html,
 body,
 #root {
+  height: 100%;
   min-height: 100%;
   margin: 0;
 }
@@ -78,8 +81,11 @@ textarea {
 
 .app-shell {
   position: relative;
+  height: 100vh;
+  height: 100dvh;
   min-height: 100vh;
-  padding: 32px 16px 40px;
+  min-height: 100dvh;
+  padding: var(--app-shell-padding-top) 16px var(--app-shell-padding-bottom);
   overflow: hidden;
   isolation: isolate;
   background: #05070d;
@@ -142,6 +148,23 @@ textarea {
   z-index: 2;
   width: min(1360px, 100%);
   margin: 0 auto;
+  height: calc(100vh - var(--app-shell-padding-top) - var(--app-shell-padding-bottom));
+  height: calc(100dvh - var(--app-shell-padding-top) - var(--app-shell-padding-bottom));
+  min-height: calc(100vh - var(--app-shell-padding-top) - var(--app-shell-padding-bottom));
+  min-height: calc(100dvh - var(--app-shell-padding-top) - var(--app-shell-padding-bottom));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell--editor {
+  --app-shell-padding-top: 18px;
+  --app-shell-padding-bottom: 18px;
+}
+
+.app-shell__inner--editor {
+  width: 100%;
+  max-width: none;
 }
 
 .screen-loader {
@@ -168,6 +191,15 @@ textarea {
 
 .page-section {
   margin-top: 24px;
+}
+
+.editor-screen {
+  margin-top: 0;
+  min-height: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .hero-block {
@@ -1093,8 +1125,21 @@ textarea {
 
 .editor-workbench {
   display: grid;
-  gap: 18px;
-  align-items: start;
+  gap: 16px;
+  align-items: stretch;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.editor-main {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  place-items: stretch;
+  overflow: hidden;
+  padding: 8px 8px 8px 0;
 }
 
 .editor-rail {
@@ -1190,25 +1235,66 @@ textarea {
 .editor-sheet {
   position: relative;
   overflow: hidden;
-  min-height: 760px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 30px;
-  box-shadow: var(--shadow);
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  --page-swipe-progress: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 34px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 30px 60px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
   transform-origin: center right;
+  perspective: 1800px;
+  justify-self: stretch;
+  align-self: stretch;
+}
+
+.editor-sheet--peek-right {
+  transform:
+    perspective(1800px)
+    rotateY(calc(var(--page-swipe-progress) * -8deg))
+    translateX(calc(var(--page-swipe-progress) * 18px));
+  box-shadow:
+    0 calc(30px + var(--page-swipe-progress) * 8px) calc(60px + var(--page-swipe-progress) * 10px) rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.editor-sheet--peek-left {
+  transform:
+    perspective(1800px)
+    rotateY(calc(var(--page-swipe-progress) * 8deg))
+    translateX(calc(var(--page-swipe-progress) * -18px));
+  box-shadow:
+    0 calc(30px + var(--page-swipe-progress) * 8px) calc(60px + var(--page-swipe-progress) * 10px) rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.editor-sheet::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(120deg, rgba(255, 255, 255, 0.18), transparent 16% 78%, rgba(0, 0, 0, 0.08)),
+    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.12), transparent 26%);
+  pointer-events: none;
 }
 
 .editor-sheet__inner {
   position: relative;
-  display: grid;
-  gap: 18px;
-  min-height: 760px;
-  padding: 28px;
+  min-height: 100%;
+  height: 100%;
+  padding: 12px;
 }
 
 .editor-sheet__status {
   position: absolute;
   top: 18px;
-  left: 18px;
+  right: 18px;
   z-index: 7;
 }
 
@@ -1231,12 +1317,61 @@ textarea {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
 }
 
+.editor-sheet__page {
+  position: relative;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04)),
+    rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -24px 36px rgba(0, 0, 0, 0.04);
+  isolation: isolate;
+}
+
+.editor-sheet__page::before,
+.editor-sheet__page::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  height: 22px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.editor-sheet__page::before {
+  bottom: 8px;
+  background: rgba(0, 0, 0, 0.1);
+  filter: blur(16px);
+  z-index: 0;
+}
+
+.editor-sheet__page::after {
+  bottom: 0;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.1));
+  z-index: 1;
+}
+
 .editor-sheet__textarea {
-  min-height: 280px;
-  background: rgba(255, 255, 255, 0.16);
-  border-radius: 26px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 72px 36px 108px;
+  overflow: auto;
+  resize: none;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  line-height: 1.7;
+  color: inherit;
+  caret-color: currentColor;
 }
 
 .editor-sheet__tools {
@@ -1266,45 +1401,185 @@ textarea {
   font-size: 0.9rem;
 }
 
-.editor-sheet--flip-right {
-  animation: page-flip-right 0.18s ease;
+.editor-sheet__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  pointer-events: none;
 }
 
-.editor-sheet--flip-left {
-  animation: page-flip-left 0.18s ease;
+.editor-sheet__page-index {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background:
+    linear-gradient(180deg, rgba(18, 25, 40, 0.52), rgba(10, 15, 24, 0.36)),
+    rgba(10, 15, 24, 0.38);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  backdrop-filter: blur(14px);
 }
 
-@keyframes page-flip-right {
+.editor-sheet__page-index::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(149, 255, 242, 0.88);
+  box-shadow: 0 0 0 4px rgba(149, 255, 242, 0.12);
+}
+
+.editor-sheet__flip-curl {
+  position: absolute;
+  bottom: -8px;
+  width: 140px;
+  height: 140px;
+  z-index: 4;
+  pointer-events: none;
+  opacity: calc(0.1 + var(--page-swipe-progress) * 0.42);
+  will-change: transform, opacity, filter;
+}
+
+.editor-sheet__flip-curl::before,
+.editor-sheet__flip-curl::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.editor-sheet__flip-curl::before {
+  border-radius: 0 0 26px 0;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.74) 0 22%, rgba(241, 233, 216, 0.92) 28%, rgba(212, 201, 182, 0.84) 56%, rgba(61, 48, 33, 0.2) 100%);
+  box-shadow:
+    -10px -8px 18px rgba(0, 0, 0, 0.12),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.52);
+}
+
+.editor-sheet__flip-curl::after {
+  inset: 18px 0 0 18px;
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.16), transparent 68%);
+  filter: blur(10px);
+}
+
+.editor-sheet__flip-curl--right {
+  right: -8px;
+  transform-origin: bottom right;
+}
+
+.editor-sheet__flip-curl--right::before {
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+.editor-sheet__flip-curl--left {
+  left: -8px;
+  transform-origin: bottom left;
+}
+
+.editor-sheet__flip-curl--left::before {
+  border-radius: 0 0 0 26px;
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}
+
+.editor-sheet__flip-curl--left::after {
+  inset: 20px 20px 0 0;
+  background: linear-gradient(225deg, rgba(0, 0, 0, 0.24), transparent 66%);
+}
+
+.editor-sheet__flip-curl--preview.editor-sheet__flip-curl--right {
+  transform:
+    translate(
+      calc(var(--page-swipe-progress) * 6px),
+      calc(var(--page-swipe-progress) * -3px)
+    )
+    scale(calc(0.9 + var(--page-swipe-progress) * 0.12))
+    rotate(calc(var(--page-swipe-progress) * -5deg));
+}
+
+.editor-sheet__flip-curl--preview.editor-sheet__flip-curl--left {
+  transform:
+    translate(
+      calc(var(--page-swipe-progress) * -6px),
+      calc(var(--page-swipe-progress) * -3px)
+    )
+    scale(calc(0.9 + var(--page-swipe-progress) * 0.12))
+    rotate(calc(var(--page-swipe-progress) * 5deg));
+}
+
+.editor-sheet__flip-curl--flip.editor-sheet__flip-curl--right {
+  animation: page-curl-turn-right 0.3s cubic-bezier(0.22, 0.72, 0.2, 1);
+}
+
+.editor-sheet__flip-curl--flip.editor-sheet__flip-curl--left {
+  animation: page-curl-turn-left 0.3s cubic-bezier(0.22, 0.72, 0.2, 1);
+}
+
+.editor-sheet--flip-right .editor-sheet__page::after,
+.editor-sheet--flip-left .editor-sheet__page::after {
+  animation: page-edge-shadow 0.3s ease;
+}
+
+@keyframes page-curl-turn-right {
   0% {
-    transform: rotateY(0deg) translateX(0);
-    opacity: 1;
+    opacity: 0.14;
+    transform: translate(1px, 0) scale(0.94) rotate(-3deg);
+  }
+  25% {
+    opacity: 0.72;
   }
   100% {
-    transform: rotateY(-12deg) translateX(24px);
-    opacity: 0.7;
+    opacity: 0;
+    transform: translate(18px, -12px) scale(1.02) rotate(-10deg);
   }
 }
 
-@keyframes page-flip-left {
+@keyframes page-curl-turn-left {
   0% {
-    transform: rotateY(0deg) translateX(0);
-    opacity: 1;
+    opacity: 0.14;
+    transform: translate(-1px, 0) scale(0.94) rotate(3deg);
+  }
+  25% {
+    opacity: 0.72;
   }
   100% {
-    transform: rotateY(12deg) translateX(-24px);
-    opacity: 0.7;
+    opacity: 0;
+    transform: translate(-18px, -12px) scale(1.02) rotate(10deg);
+  }
+}
+
+@keyframes page-edge-shadow {
+  0% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 0.54;
+  }
+  100% {
+    opacity: 0.3;
   }
 }
 
 .shape-layer {
   position: absolute;
-  inset: 24px 24px 24px 24px;
+  inset: 18px 18px 18px 18px;
   pointer-events: none;
 }
 
 .page-media-layer {
   position: absolute;
-  inset: 24px 24px 24px 24px;
+  inset: 18px 18px 18px 18px;
   pointer-events: none;
 }
 
@@ -1325,6 +1600,13 @@ textarea {
   backdrop-filter: blur(10px);
   touch-action: none;
   user-select: none;
+}
+
+.page-media--active {
+  box-shadow:
+    0 22px 42px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 0 0 2px rgba(149, 255, 242, 0.28);
 }
 
 .page-media--image {
@@ -1438,6 +1720,12 @@ textarea {
   user-select: none;
 }
 
+.shape-note--active {
+  box-shadow:
+    0 18px 36px rgba(0, 0, 0, 0.2),
+    0 0 0 2px rgba(149, 255, 242, 0.24);
+}
+
 .shape-note--torn {
   clip-path: polygon(0 5%, 7% 0, 15% 3%, 24% 0, 37% 4%, 49% 0, 61% 4%, 72% 1%, 84% 4%, 93% 0, 100% 5%, 100% 95%, 95% 100%, 88% 96%, 74% 100%, 63% 97%, 52% 100%, 40% 96%, 27% 100%, 15% 97%, 7% 100%, 0 95%);
 }
@@ -1477,7 +1765,7 @@ textarea {
 .bookmark-star {
   position: absolute;
   right: 18px;
-  bottom: 18px;
+  bottom: 104px;
   z-index: 6;
   display: inline-flex;
   align-items: center;
@@ -1502,12 +1790,15 @@ textarea {
 .editor-sheet__dock {
   position: absolute;
   left: 50%;
-  bottom: 18px;
+  bottom: 16px;
   z-index: 7;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 12px;
   transform: translateX(-50%);
+  max-width: calc(100% - 120px);
 }
 
 .eraser-toggle,
@@ -1559,11 +1850,15 @@ textarea {
 .page-corner {
   position: absolute;
   bottom: 0;
-  width: 108px;
-  height: 108px;
+  width: 152px;
+  height: 132px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
   border: 0;
   background: transparent;
   z-index: 5;
+  padding: 0;
 }
 
 .page-corner--left {
@@ -1576,6 +1871,62 @@ textarea {
 
 .page-corner:disabled {
   pointer-events: none;
+  opacity: 0.42;
+}
+
+.page-corner__shadow,
+.page-corner__fold {
+  position: absolute;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.page-corner__shadow {
+  width: 108px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.16);
+  filter: blur(14px);
+}
+
+.page-corner__fold {
+  width: 104px;
+  height: 104px;
+  box-shadow:
+    0 18px 28px rgba(0, 0, 0, 0.18),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+.page-corner--right .page-corner__fold {
+  right: 0;
+  border-radius: 24px 0 24px 0;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.86) 0 24%, rgba(244, 237, 223, 0.98) 32%, rgba(212, 201, 181, 0.94) 62%, rgba(73, 58, 40, 0.28) 100%);
+}
+
+.page-corner--left .page-corner__fold {
+  left: 0;
+  border-radius: 0 24px 0 24px;
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+  background:
+    linear-gradient(225deg, rgba(255, 255, 255, 0.86) 0 24%, rgba(244, 237, 223, 0.98) 32%, rgba(212, 201, 181, 0.94) 62%, rgba(73, 58, 40, 0.28) 100%);
+}
+
+.page-corner__label {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(9, 14, 24, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  backdrop-filter: blur(10px);
 }
 
 .bookmark-link {
@@ -1618,16 +1969,11 @@ textarea {
   }
 
   .editor-workbench--sidebar {
-    grid-template-columns: 110px 390px minmax(0, 1fr);
+    grid-template-columns: 92px 320px minmax(0, 1fr);
   }
 
   .editor-workbench--compact {
-    grid-template-columns: 110px minmax(0, 1fr);
-  }
-
-  .editor-topbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
+    grid-template-columns: 92px minmax(0, 1fr);
   }
 
   .editor-support-grid {
@@ -1642,7 +1988,12 @@ textarea {
 
 @media (max-width: 959px) {
   .app-shell {
-    padding-top: 20px;
+    --app-shell-padding-top: 20px;
+  }
+
+  .app-shell--editor {
+    --app-shell-padding-top: 12px;
+    --app-shell-padding-bottom: 12px;
   }
 
   .modal-sheet {
@@ -1681,19 +2032,134 @@ textarea {
   .editor-sidebar,
   .editor-main {
     grid-column: 2;
+    min-height: 0;
   }
 
-  .editor-topbar__actions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .editor-main {
+    padding: 6px 6px 6px 0;
   }
 
-  .editor-sheet__tools,
-  .attachment-row {
-    align-items: stretch;
+  .editor-sheet {
+    min-height: 0;
+    height: 100%;
   }
 
   .editor-sheet__inner {
-    padding: 20px;
+    padding: 10px;
+  }
+}
+
+@media (orientation: portrait) and (max-width: 1100px) {
+  .app-shell--editor {
+    --app-shell-padding-top: 10px;
+    --app-shell-padding-bottom: 10px;
+  }
+
+  .editor-screen {
+    gap: 10px;
+  }
+
+  .breadcrumbs {
+    padding: 0 6px;
+    font-size: 0.86rem;
+  }
+
+  .editor-workbench {
+    gap: 10px;
+  }
+
+  .editor-workbench--compact {
+    grid-template-columns: 82px minmax(0, 1fr) !important;
+  }
+
+  .editor-workbench--sidebar {
+    grid-template-columns: 82px minmax(260px, 300px) minmax(0, 1fr) !important;
+  }
+
+  .editor-rail {
+    grid-column: 1;
+    grid-row: 1;
+    position: sticky;
+    top: 8px;
+    width: auto;
+    padding: 10px;
+    border-radius: 24px;
+  }
+
+  .rail-button {
+    width: 50px;
+    height: 50px;
+  }
+
+  .editor-sidebar {
+    grid-column: 2;
+    position: relative;
+    top: auto;
+    left: auto;
+    z-index: auto;
+    width: auto;
+    max-height: none;
+    overflow: auto;
+  }
+
+  .editor-main {
+    grid-column: -2 / -1;
+    width: auto;
+    min-width: 0;
+    padding: 4px 4px 4px 0;
+  }
+
+  .editor-sheet {
+    width: 100%;
+    height: 100%;
+    border-radius: 30px;
+  }
+
+  .editor-sheet__inner {
+    padding: 8px;
+  }
+
+  .editor-sheet__page {
+    border-radius: 24px;
+  }
+
+  .editor-sheet__textarea {
+    padding: 72px 24px 106px;
+  }
+
+  .editor-sheet__status {
+    top: 14px;
+    right: 14px;
+  }
+
+  .editor-sheet__page-index {
+    min-height: 34px;
+    padding: 0 12px;
+    font-size: 0.76rem;
+  }
+
+  .bookmark-star {
+    right: 14px;
+    bottom: 96px;
+  }
+
+  .editor-sheet__dock {
+    bottom: 12px;
+  }
+
+  .page-corner {
+    width: 120px;
+    height: 104px;
+  }
+
+  .page-corner__fold {
+    width: 82px;
+    height: 82px;
+  }
+
+  .page-corner__label {
+    margin-bottom: 8px;
+    padding: 5px 10px;
+    font-size: 0.72rem;
   }
 }

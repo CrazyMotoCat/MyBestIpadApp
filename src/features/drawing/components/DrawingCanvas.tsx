@@ -1,4 +1,4 @@
-import { PointerEvent, useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { DrawingPoint, DrawingStroke } from "@/shared/types/models";
 import { ToolStrokeStyle } from "@/shared/types/presets";
 import { createId } from "@/shared/lib/utils/id";
@@ -12,6 +12,13 @@ interface DrawingCanvasProps {
   opacity: number;
   strokeStyle: ToolStrokeStyle;
   smoothing: number;
+  className?: string;
+}
+
+export interface DrawingCanvasHandle {
+  beginStroke: (point: DrawingPoint) => void;
+  appendPoint: (point: DrawingPoint) => void;
+  endStroke: () => void;
 }
 
 function applyStrokeStyle(
@@ -67,16 +74,20 @@ function drawStroke(context: CanvasRenderingContext2D, stroke: DrawingStroke) {
   context.stroke();
 }
 
-export function DrawingCanvas({
-  strokes,
-  onChange,
-  toolId,
-  color,
-  strokeWidth,
-  opacity,
-  strokeStyle,
-  smoothing,
-}: DrawingCanvasProps) {
+export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(function DrawingCanvas(
+  {
+    strokes,
+    onChange,
+    toolId,
+    color,
+    strokeWidth,
+    opacity,
+    strokeStyle,
+    smoothing,
+    className,
+  },
+  ref,
+) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeStrokeRef = useRef<DrawingStroke | null>(null);
   const strokesRef = useRef<DrawingStroke[]>(strokes);
@@ -114,71 +125,51 @@ export function DrawingCanvas({
     }
   }, [strokes]);
 
-  function getPoint(event: PointerEvent<HTMLCanvasElement>): DrawingPoint {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    return {
-      x: event.clientX - bounds.left,
-      y: event.clientY - bounds.top,
-    };
-  }
+  useImperativeHandle(
+    ref,
+    () => ({
+      beginStroke(point) {
+        const stroke: DrawingStroke = {
+          id: createId("stroke"),
+          pageId: "draft",
+          toolId,
+          color,
+          width: strokeWidth,
+          opacity,
+          strokeStyle,
+          smoothing,
+          points: [point],
+          createdAt: new Date().toISOString(),
+        };
 
-  function handlePointerDown(event: PointerEvent<HTMLCanvasElement>) {
-    const point = getPoint(event);
-    const stroke: DrawingStroke = {
-      id: createId("stroke"),
-      pageId: "draft",
-      toolId,
-      color,
-      width: strokeWidth,
-      opacity,
-      strokeStyle,
-      smoothing,
-      points: [point],
-      createdAt: new Date().toISOString(),
-    };
+        activeStrokeRef.current = stroke;
+        const nextStrokes = [...strokesRef.current, stroke];
+        strokesRef.current = nextStrokes;
+        onChange(nextStrokes);
+      },
+      appendPoint(point) {
+        const activeStroke = activeStrokeRef.current;
 
-    activeStrokeRef.current = stroke;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const nextStrokes = [...strokesRef.current, stroke];
-    strokesRef.current = nextStrokes;
-    onChange(nextStrokes);
-  }
+        if (!activeStroke) {
+          return;
+        }
 
-  function handlePointerMove(event: PointerEvent<HTMLCanvasElement>) {
-    const activeStroke = activeStrokeRef.current;
+        const updatedStroke: DrawingStroke = {
+          ...activeStroke,
+          points: [...activeStroke.points, point],
+        };
 
-    if (!activeStroke) {
-      return;
-    }
-
-    const point = getPoint(event);
-    const updatedStroke: DrawingStroke = {
-      ...activeStroke,
-      points: [...activeStroke.points, point],
-    };
-
-    activeStrokeRef.current = updatedStroke;
-    const nextStrokes = [...strokesRef.current.slice(0, -1), updatedStroke];
-    strokesRef.current = nextStrokes;
-    onChange(nextStrokes);
-  }
-
-  function handlePointerUp(event: PointerEvent<HTMLCanvasElement>) {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
-    activeStrokeRef.current = null;
-  }
-
-  return (
-    <canvas
-      ref={canvasRef}
-      className="editor-canvas"
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerLeave={handlePointerUp}
-    />
+        activeStrokeRef.current = updatedStroke;
+        const nextStrokes = [...strokesRef.current.slice(0, -1), updatedStroke];
+        strokesRef.current = nextStrokes;
+        onChange(nextStrokes);
+      },
+      endStroke() {
+        activeStrokeRef.current = null;
+      },
+    }),
+    [color, onChange, opacity, smoothing, strokeStyle, strokeWidth, toolId],
   );
-}
+
+  return <canvas ref={canvasRef} className={className ?? "editor-canvas"} aria-hidden="true" />;
+});

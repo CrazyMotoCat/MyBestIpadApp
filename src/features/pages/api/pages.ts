@@ -141,6 +141,57 @@ export async function createPage(notebookId: string, title: string) {
   return page;
 }
 
+export async function deletePage(pageId: string) {
+  const db = await getDatabase();
+  const page = await getPage(pageId);
+
+  if (!page) {
+    return null;
+  }
+
+  const pages = await listPages(page.notebookId);
+  const remainingPages = pages.filter((item) => item.id !== pageId);
+  const pageElements = await db.getAllFromIndex("pageElements", "by-pageId", pageId);
+  const drawingStrokes = await db.getAllFromIndex("drawingStrokes", "by-pageId", pageId);
+  const ownedAssets = await db.getAllFromIndex("assets", "by-ownerId", pageId);
+  const transaction = db.transaction(["pages", "pageElements", "drawingStrokes", "assets"], "readwrite");
+
+  await transaction.objectStore("pages").delete(pageId);
+
+  for (const element of pageElements) {
+    await transaction.objectStore("pageElements").delete(element.id);
+  }
+
+  for (const stroke of drawingStrokes) {
+    await transaction.objectStore("drawingStrokes").delete(stroke.id);
+  }
+
+  for (const asset of ownedAssets) {
+    await transaction.objectStore("assets").delete(asset.id);
+  }
+
+  for (const [index, item] of remainingPages.entries()) {
+    await transaction.objectStore("pages").put({
+      ...item,
+      order: index + 1,
+      pageOrder: index + 1,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  await transaction.done;
+  await touchNotebook(page.notebookId);
+
+  return {
+    page,
+    remainingPages: remainingPages.map((item, index) => ({
+      ...item,
+      order: index + 1,
+      pageOrder: index + 1,
+    })),
+  };
+}
+
 export async function getOrCreateNotebookEntryPage(notebookId: string) {
   const notebook = await getNotebook(notebookId);
 

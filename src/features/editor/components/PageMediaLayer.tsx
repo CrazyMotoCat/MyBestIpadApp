@@ -5,12 +5,15 @@ import { FileAttachmentPageElement, ImagePageElement } from "@/shared/types/mode
 interface PageMediaLayerProps {
   images: ImagePageElement[];
   files: FileAttachmentPageElement[];
+  activeItemId: string | null;
   onImageChange: (item: ImagePageElement) => void;
   onImageCommit: (item: ImagePageElement) => void;
   onImageDelete: (id: string) => void;
+  onImageInteractStart: (item: ImagePageElement) => ImagePageElement;
   onFileChange: (item: FileAttachmentPageElement) => void;
   onFileCommit: (item: FileAttachmentPageElement) => void;
   onFileDelete: (id: string) => void;
+  onFileInteractStart: (item: FileAttachmentPageElement) => FileAttachmentPageElement;
   getTrashBounds: () => DOMRect | null;
   onDragStateChange: (isDragging: boolean) => void;
   onTrashHoverChange: (isHoveringTrash: boolean) => void;
@@ -55,6 +58,7 @@ function hasMovedTooFar(startX: number, startY: number, currentX: number, curren
 
 function ImageElementCard({
   item,
+  isActive,
   onChange,
   onCommit,
   onContainerPointerDown,
@@ -65,6 +69,7 @@ function ImageElementCard({
   onResizePointerUp,
 }: {
   item: ImagePageElement;
+  isActive: boolean;
   onChange: (item: ImagePageElement) => void;
   onCommit: (item: ImagePageElement) => void;
   onContainerPointerDown: (event: PointerEvent<HTMLElement>, item: MediaElement) => void;
@@ -78,7 +83,7 @@ function ImageElementCard({
 
   return (
     <article
-      className="page-media page-media--image"
+      className={`page-media page-media--image ${isActive ? "page-media--active" : ""}`}
       style={{
         left: item.x,
         top: item.y,
@@ -114,6 +119,7 @@ function ImageElementCard({
 
 function FileElementCard({
   item,
+  isActive,
   onChange,
   onCommit,
   onContainerPointerDown,
@@ -124,6 +130,7 @@ function FileElementCard({
   onResizePointerUp,
 }: {
   item: FileAttachmentPageElement;
+  isActive: boolean;
   onChange: (item: FileAttachmentPageElement) => void;
   onCommit: (item: FileAttachmentPageElement) => void;
   onContainerPointerDown: (event: PointerEvent<HTMLElement>, item: MediaElement) => void;
@@ -135,7 +142,7 @@ function FileElementCard({
 }) {
   return (
     <article
-      className="page-media page-media--file"
+      className={`page-media page-media--file ${isActive ? "page-media--active" : ""}`}
       style={{
         left: item.x,
         top: item.y,
@@ -180,12 +187,15 @@ function FileElementCard({
 export function PageMediaLayer({
   images,
   files,
+  activeItemId,
   onImageChange,
   onImageCommit,
   onImageDelete,
+  onImageInteractStart,
   onFileChange,
   onFileCommit,
   onFileDelete,
+  onFileInteractStart,
   getTrashBounds,
   onDragStateChange,
   onTrashHoverChange,
@@ -261,22 +271,33 @@ export function PageMediaLayer({
     onTrashHoverChange(false);
   }
 
+  function activateItem(item: MediaElement) {
+    if (item.type === "image") {
+      const promotedItem = onImageInteractStart(item);
+      draftImagesRef.current = images.map((currentItem) => (currentItem.id === promotedItem.id ? promotedItem : currentItem));
+      setDraftImages(draftImagesRef.current);
+      return promotedItem;
+    }
+
+    const promotedItem = onFileInteractStart(item);
+    draftFilesRef.current = files.map((currentItem) => (currentItem.id === promotedItem.id ? promotedItem : currentItem));
+    setDraftFiles(draftFilesRef.current);
+    return promotedItem;
+  }
+
   function handlePressStart(event: PointerEvent<HTMLElement>, item: MediaElement) {
     event.stopPropagation();
-    draftImagesRef.current = images;
-    draftFilesRef.current = files;
-    setDraftImages(images);
-    setDraftFiles(files);
+    const promotedItem = activateItem(item);
     event.currentTarget.setPointerCapture(event.pointerId);
 
     if (event.pointerType === "mouse") {
-      startDrag(item, "move", event.clientX, event.clientY);
+      startDrag(promotedItem, "move", event.clientX, event.clientY);
       return;
     }
 
     clearLongPress();
     pendingLongPressRef.current = {
-      id: item.id,
+      id: promotedItem.id,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -284,11 +305,11 @@ export function PageMediaLayer({
     longPressTimeoutRef.current = window.setTimeout(() => {
       const pending = pendingLongPressRef.current;
 
-      if (!pending || pending.id !== item.id || pending.pointerId !== event.pointerId) {
+      if (!pending || pending.id !== promotedItem.id || pending.pointerId !== event.pointerId) {
         return;
       }
 
-      startDrag(item, "move", pending.startX, pending.startY);
+      startDrag(promotedItem, "move", pending.startX, pending.startY);
       longPressTimeoutRef.current = null;
     }, LONG_PRESS_MS);
   }
@@ -296,12 +317,9 @@ export function PageMediaLayer({
   function beginResize(event: PointerEvent<HTMLDivElement>, item: MediaElement) {
     event.stopPropagation();
     clearLongPress();
-    draftImagesRef.current = images;
-    draftFilesRef.current = files;
-    setDraftImages(images);
-    setDraftFiles(files);
+    const promotedItem = activateItem(item);
     event.currentTarget.setPointerCapture(event.pointerId);
-    startDrag(item, "resize", event.clientX, event.clientY);
+    startDrag(promotedItem, "resize", event.clientX, event.clientY);
   }
 
   function handleMove(event: PointerEvent<HTMLElement>, item: MediaElement) {
@@ -427,6 +445,7 @@ export function PageMediaLayer({
         <ImageElementCard
           key={item.id}
           item={item}
+          isActive={activeItemId === item.id}
           onChange={onImageChange}
           onCommit={onImageCommit}
           onContainerPointerDown={handlePressStart}
@@ -441,6 +460,7 @@ export function PageMediaLayer({
         <FileElementCard
           key={item.id}
           item={item}
+          isActive={activeItemId === item.id}
           onChange={onFileChange}
           onCommit={onFileCommit}
           onContainerPointerDown={handlePressStart}
