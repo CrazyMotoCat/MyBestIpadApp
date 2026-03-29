@@ -1,46 +1,89 @@
-const STATIC_CACHE = "mybestipadapp-static-v4";
-const RUNTIME_CACHE = "mybestipadapp-runtime-v4";
-const OFFLINE_HTML = "/offline.html";
-const SHELL_URL = "/";
-const STATIC_URL_PATTERNS = [/^\/assets\//, /^\/icons\//, /^\/manifest\.webmanifest$/];
-const INITIAL_URLS = [SHELL_URL, "/index.html", "/manifest.webmanifest", "/icons/app-icon.svg", OFFLINE_HTML];
+const STATIC_CACHE = "mybestipadapp-static-v6";
+const RUNTIME_CACHE = "mybestipadapp-runtime-v6";
+const SCOPE_URL = new URL(self.registration.scope);
+const SCOPE_PATH = SCOPE_URL.pathname.endsWith("/") ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
+const INDEX_HTML_URL = new URL("./index.html", SCOPE_URL).toString();
+const SHELL_URL = new URL("./", SCOPE_URL).toString();
+const MANIFEST_URL = new URL("./manifest.webmanifest", SCOPE_URL).toString();
+const ICON_URL = new URL("./icons/app-icon.svg", SCOPE_URL).toString();
+const OFFLINE_HTML_URL = new URL("./offline.html", SCOPE_URL).toString();
+const STATIC_URL_PATTERNS = [/^assets\//, /^icons\//, /^manifest\.webmanifest$/, /^offline\.html$/, /^index\.html$/];
+const INITIAL_URLS = [SHELL_URL, INDEX_HTML_URL, MANIFEST_URL, ICON_URL, OFFLINE_HTML_URL];
 
 function isCacheableResponse(response) {
   return Boolean(response) && (response.ok || response.type === "opaque");
 }
 
-function isStaticAsset(url) {
-  return STATIC_URL_PATTERNS.some((pattern) => pattern.test(url.pathname));
+function isSameOrigin(url) {
+  return url.origin === self.location.origin;
 }
 
-async function cacheIndexAndAssets(cache) {
-  const indexResponse = await fetch("/index.html", { cache: "no-cache" });
+function isWithinScope(url) {
+  return isSameOrigin(url) && url.pathname.startsWith(SCOPE_PATH);
+}
 
-  if (!isCacheableResponse(indexResponse)) {
+function toRelativeScopePath(url) {
+  if (!isWithinScope(url)) {
+    return "";
+  }
+
+  return url.pathname.slice(SCOPE_PATH.length).replace(/^\/+/, "");
+}
+
+function isStaticAsset(url) {
+  const relativePath = toRelativeScopePath(url);
+  return STATIC_URL_PATTERNS.some((pattern) => pattern.test(relativePath));
+}
+
+function normalizeUrl(value) {
+  try {
+    const url = new URL(value, SCOPE_URL);
+    return isSameOrigin(url) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function uniqueUrls(values) {
+  return [...new Set(values.map(normalizeUrl).filter((value) => Boolean(value)))];
+}
+
+function extractAssetUrlsFromHtml(html) {
+  const matches = Array.from(html.matchAll(/(?:src|href)="([^"]+)"/g)).map((match) => match[1]);
+  return uniqueUrls(matches);
+}
+
+async function cacheResponse(cache, request, response) {
+  if (!isCacheableResponse(response)) {
     return;
   }
 
-  await cache.put("/index.html", indexResponse.clone());
-  await cache.put("/", indexResponse.clone());
+  await cache.put(request, response.clone());
+}
 
-  const html = await indexResponse.text();
-  const assetMatches = Array.from(html.matchAll(/(?:src|href)="([^"]+)"/g))
-    .map((match) => match[1])
-    .filter((value) => Boolean(value))
-    .map((value) => new URL(value, self.location.origin))
-    .filter((url) => url.origin === self.location.origin)
-    .map((url) => url.pathname);
+async function warmStaticCache(seedUrls = []) {
+  const cache = await caches.open(STATIC_CACHE);
+  const urls = uniqueUrls([...INITIAL_URLS, ...seedUrls]);
 
-  const uniqueUrls = [...new Set([...INITIAL_URLS, ...assetMatches])];
+  try {
+    const indexResponse = await fetch(INDEX_HTML_URL, { cache: "no-cache" });
+
+    if (isCacheableResponse(indexResponse)) {
+      await cacheResponse(cache, INDEX_HTML_URL, indexResponse.clone());
+      await cacheResponse(cache, SHELL_URL, indexResponse.clone());
+
+      const html = await indexResponse.text();
+      urls.push(...extractAssetUrlsFromHtml(html));
+    }
+  } catch {
+    // ignore and continue with the best available warm-up set
+  }
 
   await Promise.all(
-    uniqueUrls.map(async (url) => {
+    uniqueUrls(urls).map(async (url) => {
       try {
         const response = await fetch(url, { cache: "no-cache" });
-
-        if (isCacheableResponse(response)) {
-          await cache.put(url, response);
-        }
+        await cacheResponse(cache, url, response);
       } catch {
         // ignore failed warm-up fetches
       }
@@ -73,14 +116,7 @@ function offlineErrorResponse() {
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
-      const cache = await caches.open(STATIC_CACHE);
-
-      try {
-        await cacheIndexAndAssets(cache);
-      } catch {
-        await cache.addAll(INITIAL_URLS);
-      }
-
+      await warmStaticCache();
       await self.skipWaiting();
     })(),
   );
@@ -108,8 +144,9 @@ self.addEventListener("message", (event) => {
     return;
   }
 
-  if (event.data?.type === "WARM_APP_SHELL") {
-    event.waitUntil?.(caches.open(STATIC_CACHE).then((cache) => cacheIndexAndAssets(cache)));
+  if (event.data?.type === "WARM_APP_SHELL" || event.data?.type === "WARM_URLS") {
+    const urls = Array.isArray(event.data?.urls) ? event.data.urls : [];
+    event.waitUntil(warmStaticCache(urls));
   }
 });
 
@@ -120,30 +157,32 @@ self.addEventListener("fetch", (event) => {
 
   const requestUrl = new URL(event.request.url);
 
-  if (requestUrl.origin !== self.location.origin) {
+  if (!isSameOrigin(requestUrl)) {
     return;
   }
 
   if (event.request.mode === "navigate") {
     event.respondWith(
       (async () => {
+        const cache = await caches.open(STATIC_CACHE);
+
         try {
           const networkResponse = await fetch(event.request);
 
           if (isCacheableResponse(networkResponse)) {
-            const cache = await caches.open(STATIC_CACHE);
-            await cache.put("/index.html", networkResponse.clone());
-            await cache.put("/", networkResponse.clone());
+            await cache.put(event.request, networkResponse.clone());
+            await cache.put(INDEX_HTML_URL, networkResponse.clone());
+            await cache.put(SHELL_URL, networkResponse.clone());
           }
 
           return networkResponse;
         } catch {
-          const cache = await caches.open(STATIC_CACHE);
-
           return (
-            (await cache.match("/index.html")) ||
-            (await cache.match("/")) ||
-            (await cache.match(OFFLINE_HTML))
+            (await cache.match(event.request, { ignoreSearch: true })) ||
+            (await cache.match(SHELL_URL, { ignoreSearch: true })) ||
+            (await cache.match(INDEX_HTML_URL, { ignoreSearch: true })) ||
+            (await cache.match(OFFLINE_HTML_URL, { ignoreSearch: true })) ||
+            offlineErrorResponse()
           );
         }
       })(),
@@ -156,7 +195,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       (async () => {
         const cache = await caches.open(STATIC_CACHE);
-        const cachedResponse = await cache.match(event.request);
+        const cachedResponse = await cache.match(event.request, { ignoreSearch: true });
 
         if (cachedResponse) {
           void revalidateIntoCache(event.request, STATIC_CACHE);
@@ -174,7 +213,7 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     (async () => {
       const cache = await caches.open(RUNTIME_CACHE);
-      const cachedResponse = await cache.match(event.request);
+      const cachedResponse = await cache.match(event.request, { ignoreSearch: true });
 
       if (cachedResponse) {
         void revalidateIntoCache(event.request, RUNTIME_CACHE);

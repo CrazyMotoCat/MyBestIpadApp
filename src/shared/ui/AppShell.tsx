@@ -10,6 +10,7 @@ import {
 } from "@/shared/lib/db/appSettings";
 import { useAssetObjectUrl } from "@/shared/lib/useAssetObjectUrl";
 import { AppSettings } from "@/shared/types/models";
+import { PwaStatusBadge } from "@/shared/ui/PwaStatusBadge";
 
 export interface AppShellContextValue {
   settings: AppSettings;
@@ -87,6 +88,7 @@ export function AppShell() {
       <div className="app-shell__backdrop" />
       <div className="app-shell__ambient" />
       <div className="app-shell__grid" />
+      <PwaStatusBadge />
       <div className={shellInnerClassName}>
         <Outlet
           context={{

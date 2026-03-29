@@ -1,14 +1,98 @@
 export function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) {
+  if (!("serviceWorker" in navigator) || !window.isSecureContext) {
     return;
   }
 
-  window.addEventListener("load", () => {
+  const STATIC_CACHE = "mybestipadapp-static-v6";
+  const CONTROL_RELOAD_KEY = "mybestipadapp-sw-controlled";
+  const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
+  const serviceWorkerUrl = new URL("sw.js", baseUrl).toString();
+
+  const collectWarmUrls = () => {
+    const urls = new Set<string>([
+      window.location.href,
+      new URL("./", baseUrl).toString(),
+      new URL("./index.html", baseUrl).toString(),
+      new URL("./manifest.webmanifest", baseUrl).toString(),
+      new URL("./offline.html", baseUrl).toString(),
+    ]);
+
+    const addUrl = (value?: string | null) => {
+      if (!value) {
+        return;
+      }
+
+      try {
+        const url = new URL(value, window.location.href);
+
+        if (url.origin === window.location.origin) {
+          urls.add(url.toString());
+        }
+      } catch {
+        // ignore malformed URLs
+      }
+    };
+
+    document.querySelectorAll("script[src], link[href], img[src]").forEach((node) => {
+      if (node instanceof HTMLScriptElement) {
+        addUrl(node.src);
+        return;
+      }
+
+      if (node instanceof HTMLLinkElement) {
+        addUrl(node.href);
+        return;
+      }
+
+      if (node instanceof HTMLImageElement) {
+        addUrl(node.src);
+      }
+    });
+
+    performance.getEntriesByType("resource").forEach((entry) => {
+      addUrl(entry.name);
+    });
+
+    return [...urls];
+  };
+
+  const register = () => {
+    let hasReloadedForController = sessionStorage.getItem(CONTROL_RELOAD_KEY) === "1";
+
     navigator.serviceWorker
-      .register("/sw.js")
+      .register(serviceWorkerUrl, { scope: baseUrl.pathname })
       .then((registration) => {
+        const primeWindowCache = async () => {
+          if (!("caches" in window)) {
+            return;
+          }
+
+          const cache = await caches.open(STATIC_CACHE);
+
+          await Promise.all(
+            collectWarmUrls().map(async (url) => {
+              try {
+                const response = await fetch(url, { cache: "no-cache", credentials: "same-origin" });
+
+                if (response.ok || response.type === "opaque") {
+                  await cache.put(url, response.clone());
+                }
+              } catch {
+                // ignore failed warm-up fetches
+              }
+            }),
+          );
+        };
+
         const warmAppShell = () => {
-          registration.active?.postMessage({ type: "WARM_APP_SHELL" });
+          const payload = {
+            type: "WARM_APP_SHELL",
+            urls: collectWarmUrls(),
+          };
+
+          void primeWindowCache();
+          registration.active?.postMessage(payload);
+          registration.waiting?.postMessage(payload);
         };
 
         registration.addEventListener("updatefound", () => {
@@ -29,8 +113,24 @@ export function registerServiceWorker() {
           registration.waiting.postMessage({ type: "SKIP_WAITING" });
         }
 
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (navigator.serviceWorker.controller) {
+            sessionStorage.setItem(CONTROL_RELOAD_KEY, "1");
+          }
+        });
+
         void navigator.serviceWorker.ready.then((readyRegistration) => {
-          readyRegistration.active?.postMessage({ type: "WARM_APP_SHELL" });
+          void primeWindowCache();
+          readyRegistration.active?.postMessage({
+            type: "WARM_APP_SHELL",
+            urls: collectWarmUrls(),
+          });
+
+          if (!navigator.serviceWorker.controller && !hasReloadedForController) {
+            hasReloadedForController = true;
+            sessionStorage.setItem(CONTROL_RELOAD_KEY, "1");
+            window.location.reload();
+          }
         });
 
         document.addEventListener("visibilitychange", () => {
@@ -48,5 +148,12 @@ export function registerServiceWorker() {
       .catch((error) => {
         console.error("Service worker registration failed", error);
       });
-  });
+  };
+
+  if (document.readyState === "complete") {
+    register();
+    return;
+  }
+
+  window.addEventListener("load", register, { once: true });
 }
