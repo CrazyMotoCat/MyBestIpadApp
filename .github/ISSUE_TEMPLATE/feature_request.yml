@@ -1,0 +1,29 @@
+name: Предложение функции
+description: Предложить улучшение или новую возможность
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Что хочется добавить
+      placeholder: Например, drag/resize для изображений на странице
+    validations:
+      required: true
+
+  - type: textarea
+    id: value
+    attributes:
+      label: Зачем это нужно
+      description: Как это улучшит сценарий использования
+      placeholder: Поможет быстрее собирать визуальные заметки на iPad
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Дополнительный контекст
+      description: Ограничения, UX-ожидания, примеры
+

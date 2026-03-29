@@ -1,6 +1,7 @@
 import { Navigate, createHashRouter } from "react-router-dom";
 import { PageEditorPage } from "@/features/editor/screens/PageEditorPage";
 import { NotebooksPage } from "@/features/notebooks/screens/NotebooksPage";
+import { NotebookEntryPage } from "@/features/pages/screens/NotebookEntryPage";
 import { NotebookPage } from "@/features/pages/screens/NotebookPage";
 import { AppShell } from "@/shared/ui/AppShell";
 
@@ -15,6 +16,10 @@ export const router = createHashRouter([
       },
       {
         path: "notebooks/:notebookId",
+        element: <NotebookEntryPage />,
+      },
+      {
+        path: "notebooks/:notebookId/manage",
         element: <NotebookPage />,
       },
       {

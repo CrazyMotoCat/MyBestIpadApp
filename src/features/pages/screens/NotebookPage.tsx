@@ -138,6 +138,7 @@ export function NotebookPage() {
             Тип: {notebookTypeLabel} • Бумага: {paperLabel} • Инструмент: {toolLabel}
           </p>
           <div className="inline-actions">
+            {pages[0] ? <Button onClick={() => navigate(`/pages/${pages[0].id}`)}>Открыть рабочую страницу</Button> : null}
             <Button variant="ghost" onClick={() => setIsEditOpen(true)}>
               Изменить оформление
             </Button>

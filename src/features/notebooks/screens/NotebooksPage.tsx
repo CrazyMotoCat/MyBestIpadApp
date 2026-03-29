@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { createNotebook, listNotebooks } from "@/features/notebooks/api/notebooks";
 import { BackgroundSettingsModal } from "@/features/notebooks/components/BackgroundSettingsModal";
 import { CreateNotebookModal } from "@/features/notebooks/components/CreateNotebookModal";
@@ -16,6 +16,7 @@ interface NotebookCardData extends Notebook {
 }
 
 export function NotebooksPage() {
+  const navigate = useNavigate();
   const { settings, updateBackground, uploadBackground, updateBackgroundDim, updateBackgroundBlur } =
     useOutletContext<AppShellContextValue>();
   const backgroundPreset = getAppBackgroundPreset(settings.backgroundId);
@@ -84,6 +85,7 @@ export function NotebooksPage() {
         onCreate={async (input) => {
           const notebook = await createNotebook(input);
           await load();
+          navigate(`/notebooks/${notebook.id}`);
           return notebook;
         }}
       />
