@@ -3,8 +3,7 @@ export function registerServiceWorker() {
     return;
   }
 
-  const STATIC_CACHE = "mybestipadapp-static-v6";
-  const CONTROL_RELOAD_KEY = "mybestipadapp-sw-controlled";
+  const STATIC_CACHE = "mybestipadapp-static-v7";
   const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
   const serviceWorkerUrl = new URL("sw.js", baseUrl).toString();
 
@@ -49,16 +48,18 @@ export function registerServiceWorker() {
       }
     });
 
-    performance.getEntriesByType("resource").forEach((entry) => {
-      addUrl(entry.name);
-    });
+    try {
+      performance.getEntriesByType("resource").forEach((entry) => {
+        addUrl(entry.name);
+      });
+    } catch {
+      // ignore unsupported performance entries
+    }
 
     return [...urls];
   };
 
   const register = () => {
-    let hasReloadedForController = sessionStorage.getItem(CONTROL_RELOAD_KEY) === "1";
-
     navigator.serviceWorker
       .register(serviceWorkerUrl, { scope: baseUrl.pathname })
       .then((registration) => {
@@ -113,24 +114,12 @@ export function registerServiceWorker() {
           registration.waiting.postMessage({ type: "SKIP_WAITING" });
         }
 
-        navigator.serviceWorker.addEventListener("controllerchange", () => {
-          if (navigator.serviceWorker.controller) {
-            sessionStorage.setItem(CONTROL_RELOAD_KEY, "1");
-          }
-        });
-
         void navigator.serviceWorker.ready.then((readyRegistration) => {
           void primeWindowCache();
           readyRegistration.active?.postMessage({
             type: "WARM_APP_SHELL",
             urls: collectWarmUrls(),
           });
-
-          if (!navigator.serviceWorker.controller && !hasReloadedForController) {
-            hasReloadedForController = true;
-            sessionStorage.setItem(CONTROL_RELOAD_KEY, "1");
-            window.location.reload();
-          }
         });
 
         document.addEventListener("visibilitychange", () => {

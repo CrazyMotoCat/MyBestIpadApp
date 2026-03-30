@@ -107,14 +107,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
   const strokesRef = useRef<DrawingStroke[]>(strokes);
   const skipPropRedrawRef = useRef(false);
 
-  function resizeCanvas(canvas: HTMLCanvasElement) {
+  function syncCanvas(canvas: HTMLCanvasElement) {
     const ratio = window.devicePixelRatio || 1;
     const bounds = canvas.getBoundingClientRect();
     const width = Math.max(bounds.width, 1);
     const height = Math.max(bounds.height, 320);
+    const nextWidth = Math.round(width * ratio);
+    const nextHeight = Math.round(height * ratio);
+    const needsResize = canvas.width !== nextWidth || canvas.height !== nextHeight;
 
-    canvas.width = width * ratio;
-    canvas.height = height * ratio;
+    if (needsResize) {
+      canvas.width = nextWidth;
+      canvas.height = nextHeight;
+    }
 
     const context = canvas.getContext("2d");
 
@@ -123,8 +128,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     }
 
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, width, height);
-    return context;
+    return { context, width, height, resized: needsResize };
   }
 
   function drawStrokeList(canvas: HTMLCanvasElement | null, nextStrokes: DrawingStroke[]) {
@@ -132,11 +136,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       return;
     }
 
-    const context = resizeCanvas(canvas);
+    const canvasState = syncCanvas(canvas);
 
-    if (!context) {
+    if (!canvasState) {
       return;
     }
+
+    const { context, width, height } = canvasState;
+    context.clearRect(0, 0, width, height);
 
     for (const stroke of nextStrokes) {
       drawStroke(context, stroke);
@@ -150,9 +157,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       return;
     }
 
-    const context = resizeCanvas(liveCanvas);
+    const canvasState = syncCanvas(liveCanvas);
 
-    if (!context || !stroke) {
+    if (!canvasState) {
+      return;
+    }
+
+    const { context, width, height } = canvasState;
+    context.clearRect(0, 0, width, height);
+
+    if (!stroke) {
       return;
     }
 

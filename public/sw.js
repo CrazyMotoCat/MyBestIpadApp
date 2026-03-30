@@ -1,5 +1,5 @@
-const STATIC_CACHE = "mybestipadapp-static-v6";
-const RUNTIME_CACHE = "mybestipadapp-runtime-v6";
+const STATIC_CACHE = "mybestipadapp-static-v7";
+const RUNTIME_CACHE = "mybestipadapp-runtime-v7";
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_PATH = SCOPE_URL.pathname.endsWith("/") ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 const INDEX_HTML_URL = new URL("./index.html", SCOPE_URL).toString();

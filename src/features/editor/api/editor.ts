@@ -68,20 +68,47 @@ export async function listPageElements(pageId: string) {
 }
 
 export async function getTextElement(pageId: string) {
-  const db = await getDatabase();
-  const record = await db.getFromIndex("pageElements", "by-pageId-type", [pageId, "text"]);
-  return record ? ensureTextElement(pageId, record as Partial<TextPageElement>) : null;
+  const textElements = await listTextElements(pageId);
+  return textElements[0] ?? null;
 }
 
-export async function saveTextElement(pageId: string, content: string) {
+export async function listTextElements(pageId: string) {
   const db = await getDatabase();
-  const existing = await getTextElement(pageId);
-  const nextElement = ensureTextElement(pageId, existing ?? undefined);
+  const elements = await db.getAllFromIndex("pageElements", "by-pageId-type", [pageId, "text"]);
+  return elements
+    .map((element) => ensureTextElement(pageId, element as Partial<TextPageElement>))
+    .sort((a, b) => a.zIndex - b.zIndex || a.createdAt.localeCompare(b.createdAt));
+}
 
-  await db.put("pageElements", {
-    ...nextElement,
-    content,
-  });
+export async function replaceTextElements(pageId: string, textElements: TextPageElement[]) {
+  const db = await getDatabase();
+  const transaction = db.transaction("pageElements", "readwrite");
+  const index = transaction.store.index("by-pageId-type");
+  let cursor = await index.openCursor(IDBKeyRange.only([pageId, "text"]));
+
+  while (cursor) {
+    await cursor.delete();
+    cursor = await cursor.continue();
+  }
+
+  for (const element of textElements) {
+    const nextElement = ensureTextElement(pageId, element);
+    await transaction.store.put({
+      ...nextElement,
+      content: element.content,
+      x: element.x,
+      y: element.y,
+      width: element.width,
+      height: element.height,
+      zIndex: element.zIndex,
+      style: {
+        ...nextElement.style,
+        ...element.style,
+      },
+    });
+  }
+
+  await transaction.done;
 }
 
 export async function ensureDrawingLayer(pageId: string, toolId: ToolPresetId) {
@@ -266,9 +293,9 @@ export async function deletePageElement(elementId: string) {
 export { getAssetById, getAssetObjectUrl };
 
 export async function getPageEditorBundle(pageId: string) {
-  const [page, textElement, strokes, images, files, shapes] = await Promise.all([
+  const [page, textElements, strokes, images, files, shapes] = await Promise.all([
     getPage(pageId),
-    getTextElement(pageId),
+    listTextElements(pageId),
     listDrawingStrokes(pageId),
     listPageImages(pageId),
     listPageFiles(pageId),
@@ -277,7 +304,7 @@ export async function getPageEditorBundle(pageId: string) {
 
   return {
     page,
-    textElement,
+    textElements,
     strokes,
     images,
     files,
