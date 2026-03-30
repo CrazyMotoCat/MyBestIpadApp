@@ -5,7 +5,6 @@ import { createId } from "@/shared/lib/utils/id";
 
 interface DrawingCanvasProps {
   strokes: DrawingStroke[];
-  onChange: (strokes: DrawingStroke[]) => void;
   toolId: DrawingStroke["toolId"];
   color: string;
   strokeWidth: number;
@@ -19,6 +18,7 @@ export interface DrawingCanvasHandle {
   beginStroke: (point: DrawingPoint) => void;
   appendPoint: (point: DrawingPoint) => void;
   endStroke: () => void;
+  getStrokes: () => DrawingStroke[];
 }
 
 function applyStrokeStyle(
@@ -90,7 +90,6 @@ function drawStrokeSegment(
 export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>(function DrawingCanvas(
   {
     strokes,
-    onChange,
     toolId,
     color,
     strokeWidth,
@@ -105,7 +104,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
   const liveCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeStrokeRef = useRef<DrawingStroke | null>(null);
   const strokesRef = useRef<DrawingStroke[]>(strokes);
-  const skipPropRedrawRef = useRef(false);
+  const liveClearFrameRef = useRef<number | null>(null);
+
+  function cancelPendingLiveClear() {
+    if (liveClearFrameRef.current !== null) {
+      window.cancelAnimationFrame(liveClearFrameRef.current);
+      liveClearFrameRef.current = null;
+    }
+  }
 
   function syncCanvas(canvas: HTMLCanvasElement) {
     const ratio = window.devicePixelRatio || 1;
@@ -176,11 +182,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
   useEffect(() => {
     strokesRef.current = strokes;
 
-    if (skipPropRedrawRef.current) {
-      skipPropRedrawRef.current = false;
-      return;
-    }
-
     drawStrokeList(committedCanvasRef.current, strokes);
     redrawLiveStroke(activeStrokeRef.current);
   }, [strokes]);
@@ -193,13 +194,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
 
     handleResize();
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    return () => {
+      cancelPendingLiveClear();
+      window.removeEventListener("resize", handleResize);
+    };
   }, []);
 
   useImperativeHandle(
     ref,
     () => ({
       beginStroke(point) {
+        cancelPendingLiveClear();
+
         const stroke: DrawingStroke = {
           id: createId("stroke"),
           pageId: "draft",
@@ -262,28 +268,37 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
       },
       endStroke() {
         const committedCanvas = committedCanvasRef.current;
+        const liveCanvas = liveCanvasRef.current;
         const activeStroke = activeStrokeRef.current;
 
         if (committedCanvas && activeStroke && activeStroke.strokeStyle !== "eraser") {
           const context = committedCanvas.getContext("2d");
 
           if (context) {
-            drawStroke(context, activeStroke);
+            context.save();
+            context.setTransform(1, 0, 0, 1, 0, 0);
+            context.drawImage(liveCanvas ?? committedCanvas, 0, 0);
+            context.restore();
           }
         }
 
         if (activeStroke) {
-          const nextStrokes = [...strokesRef.current, activeStroke];
-          strokesRef.current = nextStrokes;
-          skipPropRedrawRef.current = true;
-          onChange(nextStrokes);
+          strokesRef.current = [...strokesRef.current, activeStroke];
         }
 
         activeStrokeRef.current = null;
-        redrawLiveStroke(null);
+        liveClearFrameRef.current = window.requestAnimationFrame(() => {
+          liveClearFrameRef.current = null;
+          if (!activeStrokeRef.current) {
+            redrawLiveStroke(null);
+          }
+        });
+      },
+      getStrokes() {
+        return [...strokesRef.current];
       },
     }),
-    [color, onChange, opacity, smoothing, strokeStyle, strokeWidth, toolId],
+    [color, opacity, smoothing, strokeStyle, strokeWidth, toolId],
   );
 
   return (

@@ -1,5 +1,5 @@
 import { CSSProperties, ChangeEvent, PointerEvent as ReactPointerEvent, TouchEvent, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
 import { DrawingCanvas, DrawingCanvasHandle } from "@/features/drawing/components/DrawingCanvas";
 import {
@@ -58,7 +58,11 @@ const strokeStyleLabels: Record<ToolStrokeStyle, string> = {
 
 const PAGE_DELETE_ANIMATION_MS = 340;
 const AUTOSAVE_DELAY_MS = 10 * 60 * 1000;
-const STROKE_STATE_COMMIT_DELAY_MS = 650;
+const PAGE_FLIP_ANIMATION_MS = 460;
+const PAGE_FLIP_TOUCH_ZONE_RATIO = 0.28;
+const PAGE_FLIP_MIN_GESTURE_MS = 140;
+const PAGE_FLIP_RELEASE_THRESHOLD = 0.34;
+const TEXT_DRAG_HANDLE_HEIGHT = 18;
 const TEXT_BLOCK_MIN_WIDTH = 180;
 const TEXT_BLOCK_MIN_HEIGHT = 84;
 const TEXT_BLOCK_DEFAULT_WIDTH = 280;
@@ -70,12 +74,33 @@ const SAVE_STATE_ERROR = "Ошибка сохранения";
 const DEFAULT_DRAWING_COLOR = "#111111";
 const quickPaletteColors = [DEFAULT_DRAWING_COLOR, "#d7e8ff", "#f8fbff", "#9ed0ff", "#7fffd4", "#d5ff72", "#ffd7b8", "#ff9d8c", "#c9cbc7"];
 
+type CaretDocument = Document & {
+  caretPositionFromPoint?: (x: number, y: number) => { offset: number } | null;
+  caretRangeFromPoint?: (x: number, y: number) => Range | null;
+};
+
+interface TextDragState {
+  id: string;
+  mode: "move" | "resize";
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+  originWidth: number;
+  originHeight: number;
+}
+
 function getMaxElementZIndex(
   images: ImagePageElement[],
   files: FileAttachmentPageElement[],
   shapes: ShapeNoteElement[],
 ) {
   return Math.max(0, ...images.map((item) => item.zIndex), ...files.map((item) => item.zIndex), ...shapes.map((item) => item.zIndex));
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function isTextTarget(target: EventTarget | null) {
@@ -118,6 +143,14 @@ function buildEditorTextElement(
   };
 }
 
+function isPointInsideBounds(clientX: number, clientY: number, bounds: DOMRect | null) {
+  if (!bounds) {
+    return false;
+  }
+
+  return clientX >= bounds.left && clientX <= bounds.right && clientY >= bounds.top && clientY <= bounds.bottom;
+}
+
 export function PageEditorPage() {
   const { pageId } = useParams();
   const navigate = useNavigate();
@@ -130,16 +163,21 @@ export function PageEditorPage() {
   const sheetPageRef = useRef<HTMLDivElement | null>(null);
   const paletteButtonRef = useRef<HTMLDivElement | null>(null);
   const palettePopoverRef = useRef<HTMLDivElement | null>(null);
+  const keyboardPalettePopoverRef = useRef<HTMLDivElement | null>(null);
+  const keyboardPaletteInteractionRef = useRef(false);
   const touchStartXRef = useRef<number | null>(null);
   const touchStartYRef = useRef<number | null>(null);
+  const touchStartTimeRef = useRef<number | null>(null);
   const hydratedRef = useRef(false);
   const drawingPointerIdRef = useRef<number | null>(null);
   const recentPenInteractionUntilRef = useRef(0);
   const zIndexCounterRef = useRef(1);
   const deleteTimeoutRef = useRef<number | null>(null);
   const saveTimeoutRef = useRef<number | null>(null);
-  const strokeCommitTimeoutRef = useRef<number | null>(null);
   const draftStrokesRef = useRef<DrawingStroke[]>([]);
+  const hasPendingStrokeSaveRef = useRef(false);
+  const lastTextEraseSignatureRef = useRef<string | null>(null);
+  const textDragRef = useRef<TextDragState | null>(null);
 
   const [notebook, setNotebook] = useState<Notebook | null>(null);
   const [page, setPage] = useState<Page | null>(null);
@@ -169,6 +207,7 @@ export function PageEditorPage() {
   const [flipDirection, setFlipDirection] = useState<"" | "left" | "right">("");
   const [swipePreviewDirection, setSwipePreviewDirection] = useState<"" | "left" | "right">("");
   const [swipePreviewProgress, setSwipePreviewProgress] = useState(0);
+  const [swipePreviewOffsetX, setSwipePreviewOffsetX] = useState(0);
   const [isObjectDragging, setIsObjectDragging] = useState(false);
   const [isTrashHover, setIsTrashHover] = useState(false);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
@@ -178,16 +217,14 @@ export function PageEditorPage() {
   const [isKeyboardTextMode, setIsKeyboardTextMode] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [palettePopoverPosition, setPalettePopoverPosition] = useState({ top: 0, left: 0 });
+  const [keyboardPaletteBottomOffset, setKeyboardPaletteBottomOffset] = useState(18);
 
   const toolPreset = getToolPreset(selectedToolId);
   const navigationBlocker = useBlocker(({ historyAction }) => historyAction === "POP");
   const activeSidebarSection = sidebarSections.find((section) => section.id === activeSection) ?? null;
   const isEraserActive = selectedToolId === "eraser";
-  const activeKeyboardTextElement =
-    isKeyboardTextMode && activeTextElementId
-      ? textElements.find((item) => item.id === activeTextElementId) ?? null
-      : null;
-  const currentPaletteColor = activeKeyboardTextElement?.style.color ?? (isKeyboardTextMode ? textColor : toolColor);
+  const activeKeyboardTextElement = activeTextElementId ? textElements.find((item) => item.id === activeTextElementId) ?? null : null;
+  const currentPaletteColor = activeKeyboardTextElement?.style.color ?? (activeTextElementId ? textColor : toolColor);
   const paletteLabel = activeKeyboardTextElement ? "Изменить цвет текста" : "Изменить цвет пера";
   const paletteDialogLabel = activeKeyboardTextElement ? "Выбор цвета текста" : "Выбор цвета пера";
   const isPaletteDisabled = isEraserActive && !activeKeyboardTextElement;
@@ -246,6 +283,7 @@ export function PageEditorPage() {
     setToolOpacity(preset.defaultOpacity);
     setInsertPaperStyle(pageRecord.paperType);
     setInsertColor(pageRecord.paperColor);
+    hasPendingStrokeSaveRef.current = false;
     setSaveState(SAVE_STATE_SAVED);
     setStatus("ready");
     hydratedRef.current = true;
@@ -253,11 +291,6 @@ export function PageEditorPage() {
 
   useEffect(() => {
     hydratedRef.current = false;
-
-    if (strokeCommitTimeoutRef.current !== null) {
-      window.clearTimeout(strokeCommitTimeoutRef.current);
-      strokeCommitTimeoutRef.current = null;
-    }
 
     if (!pageId) {
       setStatus("missing");
@@ -291,9 +324,6 @@ export function PageEditorPage() {
         window.clearTimeout(saveTimeoutRef.current);
       }
 
-      if (strokeCommitTimeoutRef.current !== null) {
-        window.clearTimeout(strokeCommitTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -346,6 +376,38 @@ export function PageEditorPage() {
   }, [isPaletteOpen]);
 
   useEffect(() => {
+    if (!activeKeyboardTextElement) {
+      setKeyboardPaletteBottomOffset(18);
+      return;
+    }
+
+    const viewport = window.visualViewport;
+
+    function updateKeyboardPalettePosition() {
+      const nextViewport = window.visualViewport;
+
+      if (!nextViewport) {
+        setKeyboardPaletteBottomOffset(18);
+        return;
+      }
+
+      const keyboardOverlap = Math.max(0, window.innerHeight - (nextViewport.height + nextViewport.offsetTop));
+      setKeyboardPaletteBottomOffset(keyboardOverlap + 18);
+    }
+
+    updateKeyboardPalettePosition();
+    viewport?.addEventListener("resize", updateKeyboardPalettePosition);
+    viewport?.addEventListener("scroll", updateKeyboardPalettePosition);
+    window.addEventListener("resize", updateKeyboardPalettePosition);
+
+    return () => {
+      viewport?.removeEventListener("resize", updateKeyboardPalettePosition);
+      viewport?.removeEventListener("scroll", updateKeyboardPalettePosition);
+      window.removeEventListener("resize", updateKeyboardPalettePosition);
+    };
+  }, [activeKeyboardTextElement]);
+
+  useEffect(() => {
     if (!pageId || !hydratedRef.current) {
       return;
     }
@@ -365,12 +427,14 @@ export function PageEditorPage() {
         saveTimeoutRef.current = null;
       }
     };
-  }, [layout, pageId, paperColor, paperType, strokes, textElements, title]);
+  }, [layout, pageId, paperColor, paperType, textElements, title]);
 
-  async function persistPageChanges() {
+  async function persistPageChanges(options?: { includeDraftStrokes?: boolean }) {
     if (!pageId || !hydratedRef.current) {
       return;
     }
+
+    const includeDraftStrokes = options?.includeDraftStrokes ?? false;
 
     if (saveTimeoutRef.current !== null) {
       window.clearTimeout(saveTimeoutRef.current);
@@ -385,13 +449,16 @@ export function PageEditorPage() {
         layout,
       });
       await replaceTextElements(pageId, textElements);
-      await replaceDrawingStrokes(
-        pageId,
-        draftStrokesRef.current.map((stroke) => ({
-          ...stroke,
+      if (includeDraftStrokes) {
+        await replaceDrawingStrokes(
           pageId,
-        })),
-      );
+          draftStrokesRef.current.map((stroke) => ({
+            ...stroke,
+            pageId,
+          })),
+        );
+        hasPendingStrokeSaveRef.current = false;
+      }
 
       setPage((currentPage) =>
         currentPage
@@ -405,42 +472,27 @@ export function PageEditorPage() {
             }
           : currentPage,
       );
-      setSaveState(SAVE_STATE_SAVED);
+      setSaveState(hasPendingStrokeSaveRef.current ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
     } catch (error) {
-      console.error("Autosave failed", error);
+      console.error("Save failed", error);
       setSaveState(SAVE_STATE_ERROR);
     }
   }
 
   function handleManualSave() {
-    flushDraftStrokesToState();
+    syncDraftStrokesFromCanvas(true);
     setSaveState((current) => (current === SAVE_STATE_ERROR ? current : SAVE_STATE_PENDING));
-    void persistPageChanges();
+    void persistPageChanges({ includeDraftStrokes: true });
   }
 
-  function flushDraftStrokesToState() {
-    if (strokeCommitTimeoutRef.current !== null) {
-      window.clearTimeout(strokeCommitTimeoutRef.current);
-      strokeCommitTimeoutRef.current = null;
-    }
+  function syncDraftStrokesFromCanvas(syncState = false) {
+    const nextStrokes = drawingCanvasRef.current?.getStrokes() ?? draftStrokesRef.current;
 
-    setStrokes(draftStrokesRef.current);
-  }
-
-  function scheduleDraftStrokesCommit() {
-    if (strokeCommitTimeoutRef.current !== null) {
-      window.clearTimeout(strokeCommitTimeoutRef.current);
-    }
-
-    strokeCommitTimeoutRef.current = window.setTimeout(() => {
-      strokeCommitTimeoutRef.current = null;
-      setStrokes(draftStrokesRef.current);
-    }, STROKE_STATE_COMMIT_DELAY_MS);
-  }
-
-  function handleDrawingStrokesChange(nextStrokes: DrawingStroke[]) {
     draftStrokesRef.current = nextStrokes;
-    scheduleDraftStrokesCommit();
+
+    if (syncState) {
+      setStrokes([...nextStrokes]);
+    }
   }
 
   async function handleImagesChange(event: ChangeEvent<HTMLInputElement>) {
@@ -744,7 +796,7 @@ export function PageEditorPage() {
       return;
     }
 
-    flushDraftStrokesToState();
+    syncDraftStrokesFromCanvas(true);
 
     const currentIndex = pages.findIndex((item) => item.id === page.id);
     const targetIndex = direction === "next" ? currentIndex + 1 : currentIndex - 1;
@@ -767,20 +819,35 @@ export function PageEditorPage() {
     window.setTimeout(() => {
       navigate(`/pages/${targetPage.id}`);
       setFlipDirection("");
-    }, 240);
+    }, PAGE_FLIP_ANIMATION_MS);
   }
 
   function handleSheetTouchStart(event: TouchEvent<HTMLDivElement>) {
     if (isDeletingPage || isPenInteractionLocked() || isOverlayTarget(event.target) || event.touches.length !== 1) {
       touchStartXRef.current = null;
       touchStartYRef.current = null;
+      touchStartTimeRef.current = null;
       setSwipePreviewDirection("");
       setSwipePreviewProgress(0);
+      setSwipePreviewOffsetX(0);
       return;
     }
 
-    touchStartXRef.current = event.touches[0]?.clientX ?? null;
-    touchStartYRef.current = event.touches[0]?.clientY ?? null;
+    const touch = event.touches[0];
+
+    if (!touch || !isBottomFlipZone(touch.clientY)) {
+      touchStartXRef.current = null;
+      touchStartYRef.current = null;
+      touchStartTimeRef.current = null;
+      setSwipePreviewDirection("");
+      setSwipePreviewProgress(0);
+      setSwipePreviewOffsetX(0);
+      return;
+    }
+
+    touchStartXRef.current = touch.clientX;
+    touchStartYRef.current = touch.clientY;
+    touchStartTimeRef.current = performance.now();
   }
 
   function handleSheetTouchMove(event: TouchEvent<HTMLDivElement>) {
@@ -793,17 +860,23 @@ export function PageEditorPage() {
     const deltaX = currentX - touchStartXRef.current;
     const deltaY = currentY - (touchStartYRef.current ?? currentY);
 
-    if (Math.abs(deltaX) < 18 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.1) {
+    if (Math.abs(deltaX) < 20 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) {
       setSwipePreviewDirection("");
       setSwipePreviewProgress(0);
+      setSwipePreviewOffsetX(0);
       return;
     }
 
+    event.preventDefault();
     const direction = deltaX > 0 ? "left" : "right";
-    const progress = Math.min(Math.abs(deltaX) / 180, 1);
+    const bounds = sheetPageRef.current?.getBoundingClientRect();
+    const travelDistance = Math.max(220, (bounds?.width ?? 0) * 0.42);
+    const progress = Math.min(Math.abs(deltaX) / travelDistance, 1);
+    const clampedOffsetX = clamp(deltaX, -travelDistance, travelDistance);
 
     setSwipePreviewDirection(direction);
     setSwipePreviewProgress(progress);
+    setSwipePreviewOffsetX(clampedOffsetX);
   }
 
   function handleSheetTouchEnd(event: TouchEvent<HTMLDivElement>) {
@@ -815,15 +888,26 @@ export function PageEditorPage() {
     const endY = event.changedTouches[0]?.clientY ?? touchStartYRef.current ?? 0;
     const delta = endX - touchStartXRef.current;
     const deltaY = endY - (touchStartYRef.current ?? endY);
+    const gestureDuration = touchStartTimeRef.current === null ? 0 : performance.now() - touchStartTimeRef.current;
+    const bounds = sheetPageRef.current?.getBoundingClientRect();
+    const travelDistance = Math.max(220, (bounds?.width ?? 0) * 0.42);
+    const releaseProgress = Math.min(Math.abs(delta) / travelDistance, 1);
     touchStartXRef.current = null;
     touchStartYRef.current = null;
+    touchStartTimeRef.current = null;
 
-    if (Math.abs(delta) < 72 || Math.abs(delta) <= Math.abs(deltaY) * 1.2) {
+    if (
+      releaseProgress < PAGE_FLIP_RELEASE_THRESHOLD ||
+      Math.abs(delta) <= Math.abs(deltaY) * 1.2 ||
+      gestureDuration < PAGE_FLIP_MIN_GESTURE_MS
+    ) {
       setSwipePreviewDirection("");
       setSwipePreviewProgress(0);
+      setSwipePreviewOffsetX(0);
       return;
     }
 
+    setSwipePreviewOffsetX(0);
     if (delta > 0) {
       void triggerFlip("prev");
     } else {
@@ -842,6 +926,16 @@ export function PageEditorPage() {
       x: Math.min(Math.max(clientX - bounds.left, 0), bounds.width),
       y: Math.min(Math.max(clientY - bounds.top, 0), bounds.height),
     };
+  }
+
+  function isBottomFlipZone(clientY: number) {
+    const bounds = sheetPageRef.current?.getBoundingClientRect();
+
+    if (!bounds) {
+      return false;
+    }
+
+    return clientY >= bounds.bottom - bounds.height * PAGE_FLIP_TOUCH_ZONE_RATIO;
   }
 
   function markPenInteraction() {
@@ -876,6 +970,22 @@ export function PageEditorPage() {
     setIsKeyboardTextMode(true);
   }
 
+  function focusTextInput(targetId: string) {
+    const textArea = textInputRefs.current[targetId];
+
+    if (!textArea) {
+      return false;
+    }
+
+    pendingTextFocusIdRef.current = null;
+    textArea.readOnly = false;
+    textArea.setAttribute("inputmode", "text");
+    textArea.focus({ preventScroll: true });
+    const end = textArea.value.length;
+    textArea.setSelectionRange(end, end);
+    return true;
+  }
+
   useEffect(() => {
     const targetId = pendingTextFocusIdRef.current;
 
@@ -889,13 +999,8 @@ export function PageEditorPage() {
       return;
     }
 
-    pendingTextFocusIdRef.current = null;
-    textArea.readOnly = false;
-    textArea.setAttribute("inputmode", "text");
     window.requestAnimationFrame(() => {
-      textArea.focus({ preventScroll: true });
-      const end = textArea.value.length;
-      textArea.setSelectionRange(end, end);
+      focusTextInput(targetId);
     });
   }, [activeTextElementId, isKeyboardTextMode, textElements]);
 
@@ -908,18 +1013,22 @@ export function PageEditorPage() {
       return;
     }
 
-    const maxWidth = Math.max(TEXT_BLOCK_MIN_WIDTH, Math.min(TEXT_BLOCK_MAX_WIDTH, bounds.width - targetElement.x - 24));
     const maxHeight = Math.max(TEXT_BLOCK_MIN_HEIGHT, bounds.height - targetElement.y - 112);
-    const nextWidth = Math.min(maxWidth, Math.max(TEXT_BLOCK_MIN_WIDTH, textArea.scrollWidth + 10));
-    const nextHeight = Math.min(maxHeight, Math.max(TEXT_BLOCK_MIN_HEIGHT, textArea.scrollHeight));
+    const desiredHeight = Math.min(maxHeight, Math.max(TEXT_BLOCK_MIN_HEIGHT, textArea.scrollHeight));
+    const nextHeight = Math.max(targetElement.height, desiredHeight);
 
     setTextElements((current) =>
       current.map((item) =>
-        item.id === targetId && (Math.abs(item.height - nextHeight) >= 1 || Math.abs(item.width - nextWidth) >= 1)
-          ? { ...item, width: nextWidth, height: nextHeight }
+        item.id === targetId && Math.abs(item.height - nextHeight) >= 1
+          ? { ...item, height: nextHeight }
           : item,
       ),
     );
+  }
+
+  function resetTextDragTrashState() {
+    setIsObjectDragging(false);
+    setIsTrashHover(false);
   }
 
   function handleTextElementChange(targetId: string, content: string) {
@@ -929,8 +1038,259 @@ export function PageEditorPage() {
     });
   }
 
+  function promoteTextElement(targetId: string) {
+    let promotedElement: TextPageElement | null = null;
+
+    setTextElements((current) =>
+      current.map((item) => {
+        if (item.id !== targetId) {
+          return item;
+        }
+
+        promotedElement = {
+          ...item,
+          zIndex: zIndexCounterRef.current++,
+        };
+        return promotedElement;
+      }),
+    );
+
+    return promotedElement;
+  }
+
+  function beginTextTransform(targetId: string, mode: "move" | "resize", event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const targetElement = textElements.find((item) => item.id === targetId);
+
+    if (!targetElement) {
+      return;
+    }
+
+    if (activeTextElementId) {
+      textInputRefs.current[activeTextElementId]?.blur();
+    }
+
+    setIsKeyboardTextMode(false);
+    setActiveTextElementId(null);
+    setActiveElementId(null);
+    const promotedElement = promoteTextElement(targetId) ?? targetElement;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsObjectDragging(mode === "move");
+    setIsTrashHover(false);
+    textDragRef.current = {
+      id: targetId,
+      mode,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: promotedElement.x,
+      originY: promotedElement.y,
+      originWidth: promotedElement.width,
+      originHeight: promotedElement.height,
+    };
+  }
+
+  function handleTextDragStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    beginTextTransform(targetId, "move", event);
+  }
+
+  function handleTextResizeStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    beginTextTransform(targetId, "resize", event);
+  }
+
+  function handleTextDragMove(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    const dragState = textDragRef.current;
+
+    if (!dragState || dragState.id !== targetId || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const targetElement = textElements.find((item) => item.id === targetId);
+    const bounds = sheetPageRef.current?.getBoundingClientRect();
+
+    if (!targetElement || !bounds) {
+      return;
+    }
+
+    if (dragState.mode === "move") {
+      const maxX = Math.max(0, bounds.width - targetElement.width);
+      const maxY = Math.max(0, bounds.height - targetElement.height);
+      const nextX = clamp(dragState.originX + (event.clientX - dragState.startX), 0, maxX);
+      const nextY = clamp(dragState.originY + (event.clientY - dragState.startY), 0, maxY);
+      setIsObjectDragging(true);
+      setIsTrashHover(isPointInsideBounds(event.clientX, event.clientY, getTrashBounds()));
+
+      setTextElements((current) =>
+        current.map((item) => (item.id === targetId ? { ...item, x: nextX, y: nextY } : item)),
+      );
+      return;
+    }
+
+    const maxWidth = Math.max(TEXT_BLOCK_MIN_WIDTH, Math.min(TEXT_BLOCK_MAX_WIDTH, bounds.width - targetElement.x));
+    const maxHeight = Math.max(TEXT_BLOCK_MIN_HEIGHT, bounds.height - targetElement.y);
+    const nextWidth = clamp(dragState.originWidth + (event.clientX - dragState.startX), TEXT_BLOCK_MIN_WIDTH, maxWidth);
+    const nextHeight = clamp(dragState.originHeight + (event.clientY - dragState.startY), TEXT_BLOCK_MIN_HEIGHT, maxHeight);
+
+    setTextElements((current) =>
+      current.map((item) => (item.id === targetId ? { ...item, width: nextWidth, height: nextHeight } : item)),
+    );
+  }
+
+  function handleTextDragEnd(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    const dragState = textDragRef.current;
+
+    if (!dragState || dragState.id !== targetId || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const shouldDelete = dragState.mode === "move" && isPointInsideBounds(event.clientX, event.clientY, getTrashBounds());
+    textDragRef.current = null;
+    resetTextDragTrashState();
+
+    if (shouldDelete) {
+      eraseTextElement(targetId);
+    }
+  }
+
+  function getTextEraseIndex(textArea: HTMLTextAreaElement, clientX: number, clientY: number) {
+    const caretDocument = document as CaretDocument;
+    const content = textArea.value;
+
+    if (!content) {
+      return null;
+    }
+
+    if (typeof caretDocument.caretPositionFromPoint === "function") {
+      const position = caretDocument.caretPositionFromPoint(clientX, clientY);
+
+      if (position) {
+        return clamp(position.offset, 0, content.length);
+      }
+    }
+
+    if (typeof caretDocument.caretRangeFromPoint === "function") {
+      const range = caretDocument.caretRangeFromPoint(clientX, clientY);
+
+      if (range) {
+        return clamp(range.startOffset, 0, content.length);
+      }
+    }
+
+    const bounds = textArea.getBoundingClientRect();
+    const styles = window.getComputedStyle(textArea);
+    const fontSize = Number.parseFloat(styles.fontSize) || 18;
+    const lineHeight = Number.parseFloat(styles.lineHeight) || fontSize * 1.7;
+    const paddingLeft = Number.parseFloat(styles.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(styles.paddingRight) || 0;
+    const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+    const innerWidth = Math.max(bounds.width - paddingLeft - paddingRight, fontSize * 4);
+    const averageCharWidth = Math.max(fontSize * 0.56, 8);
+    const columnsPerLine = Math.max(1, Math.floor(innerWidth / averageCharWidth));
+    const localX = Math.max(0, clientX - bounds.left - paddingLeft);
+    const localY = Math.max(0, clientY - bounds.top - paddingTop + textArea.scrollTop);
+    const targetLineIndex = Math.max(0, Math.floor(localY / lineHeight));
+    const lines = content.split("\n");
+    const safeLineIndex = clamp(targetLineIndex, 0, Math.max(lines.length - 1, 0));
+    const targetLine = lines[safeLineIndex] ?? "";
+    let offset = 0;
+
+    for (let lineIndex = 0; lineIndex < safeLineIndex; lineIndex += 1) {
+      offset += (lines[lineIndex]?.length ?? 0) + 1;
+    }
+
+    if (!targetLine.length) {
+      return clamp(offset, 0, content.length);
+    }
+
+    const wrappedColumn = clamp(Math.round(localX / averageCharWidth), 0, Math.max(columnsPerLine, targetLine.length));
+    return clamp(offset + Math.min(targetLine.length, wrappedColumn), 0, content.length);
+  }
+
+  function eraseTextAtPoint(targetId: string, clientX: number, clientY: number) {
+    const textArea = textInputRefs.current[targetId];
+    const targetElement = textElements.find((item) => item.id === targetId);
+
+    if (!textArea || !targetElement) {
+      return;
+    }
+
+    if (targetElement.content.length <= 1) {
+      eraseTextElement(targetId);
+      return;
+    }
+
+    const eraseIndex = getTextEraseIndex(textArea, clientX, clientY);
+
+    if (eraseIndex === null) {
+      eraseTextElement(targetId);
+      return;
+    }
+
+    const signature = `${targetId}:${eraseIndex}`;
+
+    if (lastTextEraseSignatureRef.current === signature) {
+      return;
+    }
+
+    lastTextEraseSignatureRef.current = signature;
+    setTextElements((current) =>
+      current.flatMap((item) => {
+        if (item.id !== targetId) {
+          return item;
+        }
+
+        if (!item.content.length) {
+          return [];
+        }
+
+        const deleteIndex = eraseIndex >= item.content.length ? item.content.length - 1 : Math.max(eraseIndex - 1, 0);
+        const nextContent = item.content.slice(0, deleteIndex) + item.content.slice(deleteIndex + 1);
+
+        if (!nextContent.length) {
+          delete textInputRefs.current[targetId];
+          return [];
+        }
+
+        return {
+          ...item,
+          content: nextContent,
+        };
+      }),
+    );
+
+    window.requestAnimationFrame(() => {
+      syncTextElementSize(targetId);
+    });
+  }
+
+  function eraseTextElement(targetId: string) {
+    if (activeTextElementId === targetId) {
+      setIsKeyboardTextMode(false);
+      setActiveTextElementId(null);
+    }
+
+    delete textInputRefs.current[targetId];
+    setTextElements((current) => current.filter((item) => item.id !== targetId));
+  }
+
   function handleTextLayerPointerDown(targetId: string, event: ReactPointerEvent<HTMLTextAreaElement>) {
     setActiveElementId(null);
+
+    if (isEraserActive) {
+      event.preventDefault();
+      eraseTextAtPoint(targetId, event.clientX, event.clientY);
+      return;
+    }
 
     if (event.pointerType === "pen") {
       event.preventDefault();
@@ -940,22 +1300,43 @@ export function PageEditorPage() {
       return;
     }
 
+    const textArea = textInputRefs.current[targetId];
+
+    if (textArea) {
+      focusTextInput(targetId);
+    }
+
     enableKeyboardTextMode(targetId);
   }
 
   function handleTextLayerPointerMoveCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
+    if (isEraserActive) {
+      event.preventDefault();
+      return;
+    }
+
     if (event.pointerType === "pen") {
       event.preventDefault();
     }
   }
 
   function handleTextLayerPointerUpCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
+    if (isEraserActive) {
+      event.preventDefault();
+      lastTextEraseSignatureRef.current = null;
+      return;
+    }
+
     if (event.pointerType === "pen") {
       event.preventDefault();
     }
   }
 
   function handleTextLayerBlur(targetId: string) {
+    if (keyboardPaletteInteractionRef.current) {
+      return;
+    }
+
     if (activeTextElementId === targetId) {
       setIsKeyboardTextMode(false);
       setActiveTextElementId(null);
@@ -965,6 +1346,15 @@ export function PageEditorPage() {
     if (textInputRefs.current[targetId]) {
       textInputRefs.current[targetId]!.readOnly = true;
     }
+  }
+
+  function handleTextLayerPointerMove(targetId: string, event: ReactPointerEvent<HTMLTextAreaElement>) {
+    if (!isEraserActive) {
+      return;
+    }
+
+    event.preventDefault();
+    eraseTextAtPoint(targetId, event.clientX, event.clientY);
   }
 
   function handleSheetPointerDownCapture(event: ReactPointerEvent<HTMLDivElement>) {
@@ -983,6 +1373,11 @@ export function PageEditorPage() {
       return;
     }
 
+    if (event.pointerType === "touch" && isBottomFlipZone(event.clientY)) {
+      setActiveElementId(null);
+      return;
+    }
+
     if (!canDraw) {
       setActiveElementId(null);
       if (!pageId) {
@@ -995,15 +1390,22 @@ export function PageEditorPage() {
         return;
       }
 
-        const nextTextElement = {
-          ...buildEditorTextElement(pageId, null, notebook?.bindingType, textColor),
-          id: createId("element"),
-          ...frame,
-          zIndex: zIndexCounterRef.current++,
+      const nextTextElement = {
+        ...buildEditorTextElement(pageId, null, notebook?.bindingType, textColor),
+        id: createId("element"),
+        ...frame,
+        zIndex: zIndexCounterRef.current++,
       };
 
-      setTextElements((current) => [...current, nextTextElement]);
-      enableKeyboardTextMode(nextTextElement.id);
+      flushSync(() => {
+        setTextElements((current) => [...current, nextTextElement]);
+        setActiveTextElementId(nextTextElement.id);
+        setIsKeyboardTextMode(true);
+      });
+
+      if (!focusTextInput(nextTextElement.id)) {
+        enableKeyboardTextMode(nextTextElement.id);
+      }
       return;
     }
 
@@ -1128,7 +1530,10 @@ export function PageEditorPage() {
   const sheetMotionDirection = flipDirection || swipePreviewDirection;
   const sheetClassName = [
     "editor-sheet",
+    swipePreviewDirection ? `editor-sheet--peek-${swipePreviewDirection}` : "",
     flipDirection ? `editor-sheet--flip-${flipDirection}` : "",
+    notebook?.bindingType === "rings" ? "editor-sheet--binding-rings" : "",
+    notebook?.bindingType === "spiral" ? "editor-sheet--binding-spiral" : "",
     isEraserActive ? "editor-sheet--eraser" : "",
     isDeletingPage ? "editor-sheet--deleting" : "",
   ]
@@ -1257,7 +1662,7 @@ export function PageEditorPage() {
         ) : null}
         </div>
         <div className="editor-screen__save-action">
-          <Button type="button" onClick={handleManualSave}>
+          <Button type="button" className="editor-screen__save-button" onClick={handleManualSave}>
             Сохранить
           </Button>
         </div>
@@ -1330,6 +1735,7 @@ export function PageEditorPage() {
               {
                 ...buildPaperStyle(paperType, paperColor),
                 "--page-swipe-progress": swipePreviewProgress.toFixed(3),
+                "--page-swipe-offset-x": `${swipePreviewOffsetX.toFixed(1)}px`,
                 "--page-delete-x": `${pageDeleteOffset.x.toFixed(1)}px`,
                 "--page-delete-y": `${pageDeleteOffset.y.toFixed(1)}px`,
                 "--editor-sheet-text-left":
@@ -1367,36 +1773,68 @@ export function PageEditorPage() {
                   const isActiveTextElement = isKeyboardTextMode && activeTextElementId === textElement.id;
 
                   return (
-                    <textarea
+                    <div
                       key={textElement.id}
-                      ref={(node) => {
-                        textInputRefs.current[textElement.id] = node;
-                      }}
-                      className={`textarea textarea--stage editor-sheet__textarea ${
-                        isActiveTextElement ? "editor-sheet__textarea--typing" : "editor-sheet__textarea--idle"
-                      }`}
+                      className={`editor-text-block ${isActiveTextElement ? "editor-text-block--active" : ""}`}
                       style={{
                         top: `${textElement.y}px`,
                         left: `${textElement.x}px`,
                         width: `${textElement.width}px`,
                         height: `${textElement.height}px`,
-                        fontSize: `${textElement.style.fontSize}px`,
-                        lineHeight: String(textElement.style.lineHeight),
-                        color: textElement.style.color,
+                        zIndex: textElement.zIndex,
                       }}
-                      value={textElement.content}
-                      onChange={(event) => handleTextElementChange(textElement.id, event.target.value)}
-                      onPointerDownCapture={(event) => handleTextLayerPointerDown(textElement.id, event)}
-                      onPointerMoveCapture={handleTextLayerPointerMoveCapture}
-                      onPointerUpCapture={handleTextLayerPointerUpCapture}
-                      onPointerCancelCapture={handleTextLayerPointerUpCapture}
-                      onBlur={() => handleTextLayerBlur(textElement.id)}
-                      readOnly={!isActiveTextElement}
-                      spellCheck={false}
-                      autoCorrect="off"
-                      autoCapitalize="off"
-                      inputMode={isActiveTextElement ? "text" : "none"}
-                    />
+                    >
+                      <button
+                        type="button"
+                        className="editor-text-block__drag"
+                        aria-label="Переместить текстовый блок"
+                        onPointerDown={(event) => handleTextDragStart(textElement.id, event)}
+                        onPointerMove={(event) => handleTextDragMove(textElement.id, event)}
+                        onPointerUp={(event) => handleTextDragEnd(textElement.id, event)}
+                        onPointerCancel={(event) => handleTextDragEnd(textElement.id, event)}
+                      />
+                      <button
+                        type="button"
+                        className="editor-text-block__resize"
+                        aria-label="Изменить размер текстового блока"
+                        onPointerDown={(event) => handleTextResizeStart(textElement.id, event)}
+                        onPointerMove={(event) => handleTextDragMove(textElement.id, event)}
+                        onPointerUp={(event) => handleTextDragEnd(textElement.id, event)}
+                        onPointerCancel={(event) => handleTextDragEnd(textElement.id, event)}
+                      />
+                      <textarea
+                        ref={(node) => {
+                          textInputRefs.current[textElement.id] = node;
+                        }}
+                        className={`textarea textarea--stage editor-sheet__textarea ${
+                          isActiveTextElement ? "editor-sheet__textarea--typing" : "editor-sheet__textarea--idle"
+                        }`}
+                        style={{
+                          fontSize: `${textElement.style.fontSize}px`,
+                          lineHeight: String(textElement.style.lineHeight),
+                          color: textElement.style.color,
+                          paddingTop: `${TEXT_DRAG_HANDLE_HEIGHT + 8}px`,
+                        }}
+                        value={textElement.content}
+                        onChange={(event) => handleTextElementChange(textElement.id, event.target.value)}
+                        onPointerDownCapture={(event) => handleTextLayerPointerDown(textElement.id, event)}
+                        onPointerMove={(event) => handleTextLayerPointerMove(textElement.id, event)}
+                        onPointerMoveCapture={handleTextLayerPointerMoveCapture}
+                        onPointerUpCapture={handleTextLayerPointerUpCapture}
+                        onPointerCancelCapture={handleTextLayerPointerUpCapture}
+                        onBlur={() => handleTextLayerBlur(textElement.id)}
+                        onFocus={() => {
+                          setActiveTextElementId(textElement.id);
+                          setIsKeyboardTextMode(true);
+                        }}
+                        readOnly={!isActiveTextElement}
+                        autoFocus={isActiveTextElement}
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        inputMode={isActiveTextElement ? "text" : "none"}
+                      />
+                    </div>
                   );
                 })}
 
@@ -1404,7 +1842,6 @@ export function PageEditorPage() {
                   ref={drawingCanvasRef}
                   className="editor-canvas editor-sheet__canvas"
                   strokes={strokes}
-                  onChange={handleDrawingStrokesChange}
                   toolId={selectedToolId}
                   color={toolColor}
                   strokeWidth={toolWidth}
@@ -1509,9 +1946,21 @@ export function PageEditorPage() {
 
       <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={handleImagesChange} />
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleFilesChange} />
-      {activeKeyboardTextElement
+      {isKeyboardTextMode && activeKeyboardTextElement
         ? createPortal(
-            <div className="palette-popover palette-popover--keyboard" role="dialog" aria-label={paletteDialogLabel}>
+            <div
+              ref={keyboardPalettePopoverRef}
+              className="palette-popover palette-popover--keyboard"
+              role="dialog"
+              aria-label={paletteDialogLabel}
+              style={{ bottom: `${keyboardPaletteBottomOffset}px` }}
+              onPointerDownCapture={() => {
+                keyboardPaletteInteractionRef.current = true;
+                window.setTimeout(() => {
+                  keyboardPaletteInteractionRef.current = false;
+                }, 600);
+              }}
+            >
               <div className="palette-popover__swatches">
                 {quickPaletteColors.map((color) => (
                   <button
@@ -1528,7 +1977,17 @@ export function PageEditorPage() {
 
               <label className="palette-popover__custom">
                 <span>Цвет текста</span>
-                <input type="color" value={currentPaletteColor} onChange={(event) => handlePaletteColorSelect(event.target.value)} />
+                <div className="palette-popover__picker-header">
+                  <span className="palette-popover__picker-preview" style={{ background: currentPaletteColor }} aria-hidden="true" />
+                  <span className="palette-popover__picker-label">Открыть большую палитру</span>
+                </div>
+                <input
+                  className="palette-popover__picker-input"
+                  type="color"
+                  value={currentPaletteColor}
+                  onInput={(event) => handlePaletteColorSelect((event.target as HTMLInputElement).value)}
+                  onChange={(event) => handlePaletteColorSelect(event.target.value)}
+                />
               </label>
             </div>,
             document.body,
