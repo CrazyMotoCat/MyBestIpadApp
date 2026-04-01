@@ -69,6 +69,10 @@ In progress now:
 - довести reload/reopen/installable offline path до предсказуемого состояния;
 - подготовить экспорт/импорт как резервный путь восстановления.
 
+In progress now:
+- первый шаг взят с самого безопасного слоя: storage/quota diagnostics в `PWA статус`, чтобы local-first поведение стало наблюдаемым до более рискованных изменений service worker и offline install path.
+- следующий подшаг на том же слое: явный recovery path прямо в `PWA статус`, чтобы при warning/danger состоянии пользователь сразу видел, что делать с локальным хранилищем и крупными вложениями.
+
 ### v1.3 — Notebook Power Features
 - добавить шаблоны блокнотов и стартовых страниц;
 - усилить bookmarks, page thumbnails и быстрый переход;

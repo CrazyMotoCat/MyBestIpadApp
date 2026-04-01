@@ -258,6 +258,61 @@ textarea {
   text-align: right;
 }
 
+.pwa-status__storage-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  font-size: 0.79rem;
+  line-height: 1.45;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.84);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pwa-status__storage-note--safe {
+  border-color: rgba(149, 255, 242, 0.16);
+  background: rgba(149, 255, 242, 0.08);
+}
+
+.pwa-status__storage-note--warning {
+  border-color: rgba(255, 216, 120, 0.22);
+  background: rgba(255, 216, 120, 0.09);
+}
+
+.pwa-status__storage-note--danger {
+  border-color: rgba(255, 122, 122, 0.26);
+  background: rgba(255, 122, 122, 0.1);
+}
+
+.pwa-status__actions {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.pwa-status__actions-title {
+  margin-bottom: 8px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.pwa-status__actions-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.pwa-status__actions-list li {
+  margin: 0;
+}
+
 .screen-loader {
   padding: 28px;
   border: 1px solid var(--line);

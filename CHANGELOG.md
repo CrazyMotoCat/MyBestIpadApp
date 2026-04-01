@@ -61,7 +61,9 @@
 - text-layer keyboard cleanup РІ `PageEditorPage` С‚РѕР¶Рµ СЃРІРµРґС‘РЅ Рє Р±РѕР»РµРµ СЏРІРЅРѕРјСѓ helper-РїСѓС‚Рё: pointer capture, blur Рё pen-triggered text deactivation РјРµРЅСЊС€Рµ РґСѓР±Р»РёСЂСѓСЋС‚ СЂСѓС‡РЅСѓСЋ Р»РѕРіРёРєСѓ.
 
 - page recovery/persistence draft objects СЃРѕР±РёСЂР°СЋС‚СЃСЏ С‡РµСЂРµР· РѕР±С‰РёР№ helper-layer `pageRecoveryDraft`, С‡С‚Рѕ РјРµРЅСЊС€Рµ РґСѓР±Р»РёСЂСѓРµС‚ РѕРґРёРЅ Рё С‚РѕС‚ Р¶Рµ page snapshot РІ РЅРµСЃРєРѕР»СЊРєРёС… persistence/recovery С‚РѕС‡РєР°С… `PageEditorPage`.
-- `v1.1 — Editor Foundation` РїРѕРґРІРµРґС‘РЅ Рє СЃРѕСЃС‚РѕСЏРЅРёСЋ almost-closed milestone: editor shell Р·Р°РјРµС‚РЅРѕ РјРµРЅСЊС€Рµ Р·Р°РІРёСЃРёС‚ РѕС‚ СЂР°Р·СЂРѕР·РЅРµРЅРЅС‹С… special-case paths РґР»СЏ text/media/shape/page gestures/recovery, Рё СЃР»РµРґСѓСЋС‰РёР№ РєСЂСѓРїРЅС‹Р№ С„РѕРєСѓСЃ Р»РѕРіРёС‡РЅРѕ СЃРјРµС‰Р°РµС‚СЃСЏ Рє `v1.2`.
+- `v1.1 — Editor Foundation` подведён к состоянию almost-closed milestone: editor shell заметно меньше зависит от разрозненных special-case paths для text/media/shape/page gestures/recovery, и следующий крупный фокус логично смещается к `v1.2`.
+- также начат `v1.2 — Offline Reliability`: в `PWA статус` добавлена storage/quota diagnostics по `navigator.storage`, чтобы было видно usage, quota и persistent-storage сигналы локального хранилища.
+- в `PWA статус` исправлены битые русские строки и добавлен более явный recovery-блок с подсказками, что делать при warning/danger состоянии локального хранилища.
 
 - persistence orchestration РІ `PageEditorPage` С‚РѕР¶Рµ СЃС‚Р°Р»Р° С‡РёС‰Рµ: build-path РґР»СЏ recovery draft Рё update payload СЃРІРµРґС‘РЅ Рє СЏРІРЅС‹Рј helper-Р°Рј РІРјРµСЃС‚Рѕ РїРѕРІС‚РѕСЂРµРЅРёСЏ РѕРґРЅРѕР№ Рё С‚РѕР№ Р¶Рµ page-shell С…РµРјС‹ РІ РЅРµСЃРєРѕР»СЊРєРёС… РјРµСЃС‚Р°С….
 

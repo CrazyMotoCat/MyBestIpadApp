@@ -7,6 +7,9 @@ interface PwaStatusSnapshot {
   hasServiceWorker: boolean;
   isControlled: boolean;
   hasOfflineShell: boolean;
+  storageQuotaBytes: number | null;
+  storageUsageBytes: number | null;
+  isPersistentStorage: boolean | null;
 }
 
 const STATIC_CACHE = "mybestipadapp-static-v7";
@@ -56,6 +59,66 @@ function getStatusTone(snapshot: PwaStatusSnapshot) {
   return "missing";
 }
 
+function formatStorageBytes(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return "Недоступно";
+  }
+
+  if (value < 1024 * 1024) {
+    return `${Math.round(value / 1024)} КБ`;
+  }
+
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} МБ`;
+  }
+
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} ГБ`;
+}
+
+function getStorageUsagePercent(snapshot: PwaStatusSnapshot) {
+  if (!snapshot.storageQuotaBytes || !snapshot.storageUsageBytes) {
+    return null;
+  }
+
+  return Math.min(100, Math.round((snapshot.storageUsageBytes / snapshot.storageQuotaBytes) * 100));
+}
+
+function getStorageUsageTone(percent: number | null) {
+  if (percent === null) {
+    return "neutral";
+  }
+
+  if (percent >= 85) {
+    return "danger";
+  }
+
+  if (percent >= 65) {
+    return "warning";
+  }
+
+  return "safe";
+}
+
+function getStorageRecoverySteps(tone: "neutral" | "safe" | "warning" | "danger") {
+  if (tone === "danger") {
+    return [
+      "Сначала вручную сохраните текущую страницу.",
+      "Удалите ненужные блокноты или тяжёлые вложения с изображениями.",
+      "Не добавляйте новые крупные файлы, пока запас по памяти не освободится.",
+    ];
+  }
+
+  if (tone === "warning") {
+    return [
+      "Проверьте, нет ли лишних изображений и файлов в текущих блокнотах.",
+      "Перед длинной офлайн-сессией лучше вручную сохранить страницу.",
+      "С крупными вложениями стоит работать осторожнее, особенно на iPad Safari.",
+    ];
+  }
+
+  return [];
+}
+
 export function PwaStatusBadge() {
   const [isOpen, setIsOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<PwaStatusSnapshot>({
@@ -65,12 +128,38 @@ export function PwaStatusBadge() {
     hasServiceWorker: "serviceWorker" in navigator,
     isControlled: Boolean(navigator.serviceWorker?.controller),
     hasOfflineShell: false,
+    storageQuotaBytes: null,
+    storageUsageBytes: null,
+    isPersistentStorage: null,
   });
 
   useEffect(() => {
     let isMounted = true;
 
     const refresh = async () => {
+      let storageQuotaBytes: number | null = null;
+      let storageUsageBytes: number | null = null;
+      let isPersistentStorage: boolean | null = null;
+
+      if ("storage" in navigator && typeof navigator.storage?.estimate === "function") {
+        try {
+          const estimate = await navigator.storage.estimate();
+          storageQuotaBytes = estimate.quota ?? null;
+          storageUsageBytes = estimate.usage ?? null;
+        } catch {
+          storageQuotaBytes = null;
+          storageUsageBytes = null;
+        }
+      }
+
+      if ("storage" in navigator && typeof navigator.storage?.persisted === "function") {
+        try {
+          isPersistentStorage = await navigator.storage.persisted();
+        } catch {
+          isPersistentStorage = null;
+        }
+      }
+
       const nextSnapshot: PwaStatusSnapshot = {
         isOnline: navigator.onLine,
         isStandalone: getStandaloneState(),
@@ -78,6 +167,9 @@ export function PwaStatusBadge() {
         hasServiceWorker: "serviceWorker" in navigator,
         isControlled: Boolean(navigator.serviceWorker?.controller),
         hasOfflineShell: await probeOfflineShell(),
+        storageQuotaBytes,
+        storageUsageBytes,
+        isPersistentStorage,
       };
 
       if (isMounted) {
@@ -128,6 +220,9 @@ export function PwaStatusBadge() {
   }, []);
 
   const tone = getStatusTone(snapshot);
+  const storageUsagePercent = getStorageUsagePercent(snapshot);
+  const storageTone = getStorageUsageTone(storageUsagePercent);
+  const storageRecoverySteps = getStorageRecoverySteps(storageTone);
 
   return (
     <div className="pwa-status">
@@ -169,6 +264,39 @@ export function PwaStatusBadge() {
             <span>Офлайн-оболочка</span>
             <strong>{snapshot.hasOfflineShell ? "В кэше" : "Не прогрета"}</strong>
           </div>
+          <div className="pwa-status__row">
+            <span>Занято в хранилище</span>
+            <strong>{formatStorageBytes(snapshot.storageUsageBytes)}</strong>
+          </div>
+          <div className="pwa-status__row">
+            <span>Лимит хранилища</span>
+            <strong>{formatStorageBytes(snapshot.storageQuotaBytes)}</strong>
+          </div>
+          <div className="pwa-status__row">
+            <span>Persistent storage</span>
+            <strong>
+              {snapshot.isPersistentStorage === null ? "Недоступно" : snapshot.isPersistentStorage ? "Да" : "Нет"}
+            </strong>
+          </div>
+          <div className={`pwa-status__storage-note pwa-status__storage-note--${storageTone}`}>
+            {storageUsagePercent === null
+              ? "Safari не всегда отдаёт точную quota-оценку, но панель показывает доступные сигналы локального хранилища."
+              : storageUsagePercent >= 85
+                ? `Локальное хранилище заполнено примерно на ${storageUsagePercent}%. Для iPad Safari это уже зона риска для крупных вложений.`
+                : storageUsagePercent >= 65
+                  ? `Локальное хранилище занято примерно на ${storageUsagePercent}%. С крупными изображениями и файлами лучше работать осторожнее.`
+                  : `Локальное хранилище занято примерно на ${storageUsagePercent}%. Запас по quota пока выглядит нормально.`}
+          </div>
+          {storageRecoverySteps.length ? (
+            <div className="pwa-status__actions">
+              <div className="pwa-status__actions-title">Что делать сейчас</div>
+              <ul className="pwa-status__actions-list">
+                {storageRecoverySteps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
