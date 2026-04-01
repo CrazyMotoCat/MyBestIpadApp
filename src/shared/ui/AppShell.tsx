@@ -9,6 +9,18 @@ import {
   uploadCustomAppBackground,
 } from "@/shared/lib/db/appSettings";
 import { getOfflineReadinessView, getStandaloneState, OfflineReadinessSnapshot } from "@/shared/lib/pwa/offlineReadiness";
+import {
+  EMPTY_SERVICE_WORKER_RUNTIME_STATUS,
+  parseServiceWorkerRuntimeStatus,
+  requestServiceWorkerRuntimeStatus,
+  ServiceWorkerRuntimeStatus,
+} from "@/shared/lib/pwa/runtimeStatus";
+import {
+  applyServiceWorkerUpdate,
+  PWA_CONTROLLER_UPDATED_EVENT,
+  PWA_UPDATE_AVAILABLE_EVENT,
+  PwaControllerUpdatedReason,
+} from "@/shared/lib/pwa/registerServiceWorker";
 import { useAssetObjectUrl } from "@/shared/lib/useAssetObjectUrl";
 import { AppSettings } from "@/shared/types/models";
 import { PwaStatusBadge } from "@/shared/ui/PwaStatusBadge";
@@ -19,12 +31,6 @@ export interface AppShellContextValue {
   uploadBackground: (file: File) => Promise<void>;
   updateBackgroundDim: (dimAmount: number) => Promise<void>;
   updateBackgroundBlur: (blurAmount: number) => Promise<void>;
-}
-
-interface ServiceWorkerRuntimeStatus {
-  cacheVersion: string | null;
-  checkedAt: string | null;
-  hasOfflineShell: boolean | null;
 }
 
 function buildShellStyle(settings: AppSettings, customBackgroundUrl: string | null): CSSProperties {
@@ -58,14 +64,11 @@ function getOfflineCoachSnapshot(swRuntimeStatus: ServiceWorkerRuntimeStatus): O
 
 export function AppShell() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [swRuntimeStatus, setSwRuntimeStatus] = useState<ServiceWorkerRuntimeStatus>({
-    cacheVersion: null,
-    checkedAt: null,
-    hasOfflineShell: null,
-  });
+  const [swRuntimeStatus, setSwRuntimeStatus] = useState<ServiceWorkerRuntimeStatus>(EMPTY_SERVICE_WORKER_RUNTIME_STATUS);
   const [isOfflineCoachDismissed, setIsOfflineCoachDismissed] = useState(false);
-  const [isUpdateReloadDismissed, setIsUpdateReloadDismissed] = useState(false);
+  const [hasUpdateAvailable, setHasUpdateAvailable] = useState(false);
   const [hasPendingShellReload, setHasPendingShellReload] = useState(false);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
   const customBackgroundUrl = useAssetObjectUrl(settings?.customBackgroundAssetId);
   const location = useLocation();
   const isEditorRoute = location.pathname.startsWith("/pages/");
@@ -76,28 +79,17 @@ export function AppShell() {
 
   useEffect(() => {
     const handleWorkerMessage = (event: MessageEvent) => {
-      const payload = event.data as
-        | {
-            type?: string;
-            cacheVersion?: string;
-            checkedAt?: string;
-            hasOfflineShell?: boolean;
-          }
-        | undefined;
+      const nextStatus = parseServiceWorkerRuntimeStatus(event.data);
 
-      if (payload?.type !== "SW_STATUS") {
+      if (!nextStatus) {
         return;
       }
 
-      setSwRuntimeStatus({
-        cacheVersion: payload.cacheVersion ?? null,
-        checkedAt: payload.checkedAt ?? null,
-        hasOfflineShell: payload.hasOfflineShell ?? null,
-      });
+      setSwRuntimeStatus(nextStatus);
     };
 
     navigator.serviceWorker?.addEventListener("message", handleWorkerMessage);
-    navigator.serviceWorker?.controller?.postMessage({ type: "REQUEST_STATUS" });
+    void requestServiceWorkerRuntimeStatus();
 
     return () => {
       navigator.serviceWorker?.removeEventListener("message", handleWorkerMessage);
@@ -106,40 +98,48 @@ export function AppShell() {
 
   useEffect(() => {
     setIsOfflineCoachDismissed(false);
-    setIsUpdateReloadDismissed(false);
   }, [location.pathname]);
 
   useEffect(() => {
-    if (!hasPendingShellReload || isUpdateReloadDismissed) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setIsUpdateReloadDismissed(true);
-    }, 7000);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [hasPendingShellReload, isUpdateReloadDismissed]);
-
-  useEffect(() => {
     const handleUpdateAvailable = () => {
-      setHasPendingShellReload(true);
-      setIsUpdateReloadDismissed(false);
+      setHasUpdateAvailable(true);
     };
 
-    const handleControllerUpdated = () => {
+    const handleControllerUpdated = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: PwaControllerUpdatedReason }>).detail?.reason;
+
+      if (reason !== "update") {
+        return;
+      }
+
+      setHasUpdateAvailable(false);
       setHasPendingShellReload(true);
-      setIsUpdateReloadDismissed(false);
+      setIsApplyingUpdate(false);
+      void requestServiceWorkerRuntimeStatus();
     };
 
-    window.addEventListener("mybestipadapp:pwa-update-available", handleUpdateAvailable);
-    window.addEventListener("mybestipadapp:pwa-controller-updated", handleControllerUpdated);
+    window.addEventListener(PWA_UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+    window.addEventListener(PWA_CONTROLLER_UPDATED_EVENT, handleControllerUpdated);
 
     return () => {
-      window.removeEventListener("mybestipadapp:pwa-update-available", handleUpdateAvailable);
-      window.removeEventListener("mybestipadapp:pwa-controller-updated", handleControllerUpdated);
+      window.removeEventListener(PWA_UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+      window.removeEventListener(PWA_CONTROLLER_UPDATED_EVENT, handleControllerUpdated);
     };
   }, []);
+
+  async function handleApplyUpdate() {
+    try {
+      setIsApplyingUpdate(true);
+      const updateApplied = await applyServiceWorkerUpdate();
+
+      if (!updateApplied) {
+        setIsApplyingUpdate(false);
+        void requestServiceWorkerRuntimeStatus();
+      }
+    } catch {
+      setIsApplyingUpdate(false);
+    }
+  }
 
   async function handleUpdateBackground(backgroundId: AppSettings["backgroundId"]) {
     const nextSettings = await updateAppBackground(backgroundId);
@@ -165,7 +165,6 @@ export function AppShell() {
   const shellInnerClassName = `app-shell__inner ${isEditorRoute ? "app-shell__inner--editor" : ""}`.trim();
   const offlineReadiness = useMemo(() => getOfflineReadinessView(getOfflineCoachSnapshot(swRuntimeStatus)), [swRuntimeStatus]);
   const showOfflineCoach = !offlineReadiness.isReady && !isOfflineCoachDismissed && !hasPendingShellReload;
-  const showUpdateReloadBanner = hasPendingShellReload && !isUpdateReloadDismissed;
 
   if (!settings) {
     return (
@@ -184,7 +183,23 @@ export function AppShell() {
       <div className="app-shell__ambient" />
       <div className="app-shell__grid" />
       <PwaStatusBadge />
-      {showUpdateReloadBanner ? (
+      {hasUpdateAvailable ? (
+        <div className="offline-update-banner" role="status" aria-live="polite">
+          <div className="offline-update-banner__copy">
+            <strong>Доступно обновление офлайн-оболочки</strong>
+            <p>
+              Новая версия Service Worker уже ожидает применения. Сначала примените обновление, затем перезагрузите
+              приложение, чтобы экран и кэш работали по одному контракту.
+            </p>
+          </div>
+          <div className="offline-update-banner__actions">
+            <button type="button" className="offline-update-banner__button" onClick={() => void handleApplyUpdate()}>
+              {isApplyingUpdate ? "Применяем..." : "Применить обновление"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {hasPendingShellReload ? (
         <div className="offline-update-banner" role="status" aria-live="polite">
           <div className="offline-update-banner__copy">
             <strong>Новая офлайн-оболочка готова</strong>
@@ -196,13 +211,6 @@ export function AppShell() {
           <div className="offline-update-banner__actions">
             <button type="button" className="offline-update-banner__button" onClick={() => window.location.reload()}>
               Перезагрузить
-            </button>
-            <button
-              type="button"
-              className="offline-update-banner__button offline-update-banner__button--ghost"
-              onClick={() => setIsUpdateReloadDismissed(true)}
-            >
-              Позже
             </button>
           </div>
         </div>

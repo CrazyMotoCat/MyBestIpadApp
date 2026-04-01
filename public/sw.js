@@ -173,7 +173,6 @@ self.addEventListener("install", (event) => {
     (async () => {
       await warmStaticCache();
       await notifyClientsStatus();
-      await self.skipWaiting();
     })(),
   );
 });
