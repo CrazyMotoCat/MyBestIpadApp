@@ -1,4 +1,5 @@
 import { getDatabase } from "@/shared/lib/db/database";
+import { recordStorageWriteFailure, recordStorageWriteSuccess } from "@/shared/lib/db/storageHealth";
 import { AppSettings, Notebook, NotebookAttachment, Page, PageElement, StoredAsset } from "@/shared/types/models";
 
 interface StorageSnapshot {
@@ -133,13 +134,25 @@ export async function repairStorageIntegrity(): Promise<StorageRepairResult> {
     });
   }
 
-  await transaction.done;
+  try {
+    await transaction.done;
 
-  return {
-    deletedAssets: report.orphanAssetIds.length,
-    unresolvedNotebookAttachments: report.danglingNotebookAttachmentIds.length,
-    unresolvedPageElements: report.danglingPageElementIds.length,
-    resetNotebookCovers: report.missingCoverNotebookIds.length,
-    resetBackgroundLink: report.missingBackgroundAsset,
-  };
+    const result = {
+      deletedAssets: report.orphanAssetIds.length,
+      unresolvedNotebookAttachments: report.danglingNotebookAttachmentIds.length,
+      unresolvedPageElements: report.danglingPageElementIds.length,
+      resetNotebookCovers: report.missingCoverNotebookIds.length,
+      resetBackgroundLink: report.missingBackgroundAsset,
+    };
+
+    recordStorageWriteSuccess(
+      "repair storage integrity",
+      `Починены локальные ссылки: assets ${result.deletedAssets}, обложки ${result.resetNotebookCovers}.`,
+    );
+
+    return result;
+  } catch (error) {
+    recordStorageWriteFailure("repair storage integrity", error, "Не удалось починить локальные ссылки.");
+    throw error;
+  }
 }

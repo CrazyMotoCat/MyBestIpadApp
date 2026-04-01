@@ -1,6 +1,7 @@
 import { defaultAppBackgroundId } from "@/shared/config/appBackgroundPresets";
 import { deleteAssetById, saveFileAsset } from "@/shared/lib/db/assets";
 import { getDatabase } from "@/shared/lib/db/database";
+import { recordStorageWriteFailure, recordStorageWriteSuccess } from "@/shared/lib/db/storageHealth";
 import { AppSettings } from "@/shared/types/models";
 
 const APP_SETTINGS_KEY: AppSettings["id"] = "app-settings";
@@ -31,7 +32,15 @@ export async function getAppSettings() {
 
   if (!record) {
     const defaults = normalizeAppSettings();
-    await db.put("appSettings", defaults);
+
+    try {
+      await db.put("appSettings", defaults);
+      recordStorageWriteSuccess("init app settings", "Сохранены настройки приложения по умолчанию.");
+    } catch (error) {
+      recordStorageWriteFailure("init app settings", error, "Не удалось сохранить настройки приложения.");
+      throw error;
+    }
+
     return defaults;
   }
 
@@ -50,13 +59,19 @@ export async function updateAppBackground(backgroundId: AppSettings["backgroundI
     updatedAt: new Date().toISOString(),
   });
 
-  await db.put("appSettings", nextSettings);
+  try {
+    await db.put("appSettings", nextSettings);
 
-  if (previousCustomBackgroundAssetId) {
-    await deleteAssetById(previousCustomBackgroundAssetId);
+    if (previousCustomBackgroundAssetId) {
+      await deleteAssetById(previousCustomBackgroundAssetId);
+    }
+
+    recordStorageWriteSuccess("update app background", "Фон приложения обновлён.");
+    return nextSettings;
+  } catch (error) {
+    recordStorageWriteFailure("update app background", error, "Не удалось обновить фон приложения.");
+    throw error;
   }
-
-  return nextSettings;
 }
 
 export async function uploadCustomAppBackground(file: File) {
@@ -72,13 +87,19 @@ export async function uploadCustomAppBackground(file: File) {
     updatedAt: new Date().toISOString(),
   });
 
-  await db.put("appSettings", nextSettings);
+  try {
+    await db.put("appSettings", nextSettings);
 
-  if (previousCustomBackgroundAssetId && previousCustomBackgroundAssetId !== asset.id) {
-    await deleteAssetById(previousCustomBackgroundAssetId);
+    if (previousCustomBackgroundAssetId && previousCustomBackgroundAssetId !== asset.id) {
+      await deleteAssetById(previousCustomBackgroundAssetId);
+    }
+
+    recordStorageWriteSuccess("upload app background", `Пользовательский фон ${file.name} сохранён.`);
+    return nextSettings;
+  } catch (error) {
+    recordStorageWriteFailure("upload app background", error, "Не удалось сохранить пользовательский фон.");
+    throw error;
   }
-
-  return nextSettings;
 }
 
 export async function updateAppBackgroundDim(dimAmount: number) {
@@ -90,8 +111,14 @@ export async function updateAppBackgroundDim(dimAmount: number) {
     updatedAt: new Date().toISOString(),
   });
 
-  await db.put("appSettings", nextSettings);
-  return nextSettings;
+  try {
+    await db.put("appSettings", nextSettings);
+    recordStorageWriteSuccess("update app background dim", "Затемнение фона обновлено.");
+    return nextSettings;
+  } catch (error) {
+    recordStorageWriteFailure("update app background dim", error, "Не удалось обновить затемнение фона.");
+    throw error;
+  }
 }
 
 export async function updateAppBackgroundBlur(blurAmount: number) {
@@ -103,6 +130,12 @@ export async function updateAppBackgroundBlur(blurAmount: number) {
     updatedAt: new Date().toISOString(),
   });
 
-  await db.put("appSettings", nextSettings);
-  return nextSettings;
+  try {
+    await db.put("appSettings", nextSettings);
+    recordStorageWriteSuccess("update app background blur", "Размытие фона обновлено.");
+    return nextSettings;
+  } catch (error) {
+    recordStorageWriteFailure("update app background blur", error, "Не удалось обновить размытие фона.");
+    throw error;
+  }
 }
