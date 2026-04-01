@@ -1,5 +1,5 @@
 import { defaultAppBackgroundId } from "@/shared/config/appBackgroundPresets";
-import { saveFileAsset } from "@/shared/lib/db/assets";
+import { deleteAssetById, saveFileAsset } from "@/shared/lib/db/assets";
 import { getDatabase } from "@/shared/lib/db/database";
 import { AppSettings } from "@/shared/types/models";
 
@@ -41,14 +41,21 @@ export async function getAppSettings() {
 export async function updateAppBackground(backgroundId: AppSettings["backgroundId"]) {
   const db = await getDatabase();
   const current = await getAppSettings();
+  const previousCustomBackgroundAssetId = current.customBackgroundAssetId;
   const nextSettings = normalizeAppSettings({
     ...current,
     backgroundMode: "preset",
     backgroundId,
+    customBackgroundAssetId: null,
     updatedAt: new Date().toISOString(),
   });
 
   await db.put("appSettings", nextSettings);
+
+  if (previousCustomBackgroundAssetId) {
+    await deleteAssetById(previousCustomBackgroundAssetId);
+  }
+
   return nextSettings;
 }
 
@@ -56,6 +63,7 @@ export async function uploadCustomAppBackground(file: File) {
   const db = await getDatabase();
   const current = await getAppSettings();
   const asset = await saveFileAsset(APP_SETTINGS_KEY, file, "background");
+  const previousCustomBackgroundAssetId = current.customBackgroundAssetId;
 
   const nextSettings = normalizeAppSettings({
     ...current,
@@ -65,6 +73,11 @@ export async function uploadCustomAppBackground(file: File) {
   });
 
   await db.put("appSettings", nextSettings);
+
+  if (previousCustomBackgroundAssetId && previousCustomBackgroundAssetId !== asset.id) {
+    await deleteAssetById(previousCustomBackgroundAssetId);
+  }
+
   return nextSettings;
 }
 

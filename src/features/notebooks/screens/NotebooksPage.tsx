@@ -7,6 +7,8 @@ import { NotebookCard } from "@/features/notebooks/components/NotebookCard";
 import { listPages } from "@/features/pages/api/pages";
 import { getAppBackgroundPreset } from "@/shared/config/appBackgroundPresets";
 import { ensureBootstrapData } from "@/shared/lib/db/bootstrap";
+import { getStorageRecoveryMessage } from "@/shared/lib/db/storageErrors";
+import { getAssetUploadPreflight } from "@/shared/lib/db/storagePreflight";
 import { Notebook } from "@/shared/types/models";
 import { Button } from "@/shared/ui/Button";
 import { AppShellContextValue } from "@/shared/ui/AppShell";
@@ -29,6 +31,7 @@ export function NotebooksPage() {
   const [deletingNotebookId, setDeletingNotebookId] = useState<string | null>(null);
   const [deleteOffset, setDeleteOffset] = useState({ x: 0, y: 0 });
   const [deleteDragOffset, setDeleteDragOffset] = useState({ x: 0, y: 0 });
+  const [backgroundUploadError, setBackgroundUploadError] = useState<string | null>(null);
   const trashButtonRef = useRef<HTMLButtonElement | null>(null);
   const deleteTimeoutRef = useRef<number | null>(null);
 
@@ -137,6 +140,7 @@ export function NotebooksPage() {
             Настроить фон приложения
           </Button>
         </div>
+        {backgroundUploadError ? <div className="inline-notice inline-notice--warning">{backgroundUploadError}</div> : null}
       </header>
 
       <div className="screen-caption">
@@ -205,7 +209,30 @@ export function NotebooksPage() {
           void updateBackground(backgroundId);
         }}
         onUpload={(file) => {
-          void uploadBackground(file);
+          const preflight = getAssetUploadPreflight(file, "Фон приложения");
+
+          if (preflight.level === "blocked") {
+            setBackgroundUploadError(preflight.message);
+            return;
+          }
+
+          if (
+            preflight.level === "warning" &&
+            preflight.message &&
+            !window.confirm(`${preflight.message}\n\nПродолжить загрузку фона?`)
+          ) {
+            setBackgroundUploadError(preflight.message);
+            return;
+          }
+
+          void uploadBackground(file)
+            .then(() => {
+              setBackgroundUploadError(null);
+            })
+            .catch((error) => {
+              console.error("Background upload failed", error);
+              setBackgroundUploadError(getStorageRecoveryMessage(error, "фон приложения"));
+            });
         }}
         onDimChange={(dimAmount) => {
           void updateBackgroundDim(dimAmount);

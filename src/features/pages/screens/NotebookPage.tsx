@@ -9,6 +9,8 @@ import { createPage, listPages, updatePage } from "@/features/pages/api/pages";
 import { getPaperPreset } from "@/shared/config/paperPresets";
 import { getToolPreset } from "@/shared/config/toolPresets";
 import { notebookTypePresets } from "@/shared/config/notebookPresets";
+import { getStorageRecoveryMessage } from "@/shared/lib/db/storageErrors";
+import { getFilesUploadPreflight } from "@/shared/lib/db/storagePreflight";
 import { buildPaperStyle } from "@/shared/lib/paper";
 import { useAssetObjectUrl } from "@/shared/lib/useAssetObjectUrl";
 import { Notebook, NotebookAttachment, Page } from "@/shared/types/models";
@@ -29,6 +31,7 @@ export function NotebookPage() {
   const [attachments, setAttachments] = useState<NotebookAttachment[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "missing">("loading");
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const sourcePageId =
     typeof location.state === "object" &&
     location.state &&
@@ -92,7 +95,33 @@ export function NotebookPage() {
       return;
     }
 
-    await attachFilesToNotebook(notebookId, Array.from(event.target.files));
+    const files = Array.from(event.target.files);
+    const preflight = getFilesUploadPreflight(files, "файлов блокнота");
+
+    if (preflight.level === "blocked") {
+      setAttachmentError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !window.confirm(`${preflight.message}\n\nПродолжить добавление файлов в блокнот?`)
+    ) {
+      setAttachmentError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      await attachFilesToNotebook(notebookId, files);
+      setAttachmentError(null);
+    } catch (error) {
+      console.error("Notebook attachment upload failed", error);
+      setAttachmentError(getStorageRecoveryMessage(error, "файлы блокнота"));
+    }
+
     event.target.value = "";
     await load();
   }
@@ -201,6 +230,7 @@ export function NotebookPage() {
             <span>Добавить файлы в блокнот</span>
             <input type="file" multiple onChange={handleFilesChange} />
           </label>
+          {attachmentError ? <div className="inline-notice inline-notice--warning">{attachmentError}</div> : null}
           <FileAttachmentList items={attachments} />
         </Panel>
       </div>

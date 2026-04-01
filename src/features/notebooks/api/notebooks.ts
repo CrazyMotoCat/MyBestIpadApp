@@ -3,7 +3,8 @@ import { defaultCoverPresetId, getCoverPreset } from "@/shared/config/coverPrese
 import { defaultNotebookStyleId, defaultNotebookTypeId } from "@/shared/config/notebookPresets";
 import { defaultPaperPresetId, getPaperPreset } from "@/shared/config/paperPresets";
 import { defaultToolPresetId } from "@/shared/config/toolPresets";
-import { saveFileAsset } from "@/shared/lib/db/assets";
+import { deleteAssetById, saveFileAsset } from "@/shared/lib/db/assets";
+import { toStorageWriteError } from "@/shared/lib/db/storageErrors";
 import { getDatabase } from "@/shared/lib/db/database";
 import { createId } from "@/shared/lib/utils/id";
 import { Notebook, NotebookAttachment } from "@/shared/types/models";
@@ -181,6 +182,7 @@ export async function updateNotebook(notebookId: string, input: UpdateNotebookAp
     throw new Error("Notebook not found");
   }
 
+  const previousCoverAssetId = notebook.coverImageAssetId;
   const coverAsset =
     input.coverMode === "custom" && input.coverImage ? await saveFileAsset(notebookId, input.coverImage, "cover") : null;
   const updatedNotebook: Notebook = {
@@ -204,6 +206,14 @@ export async function updateNotebook(notebookId: string, input: UpdateNotebookAp
   };
 
   await db.put("notebooks", updatedNotebook);
+
+  if (
+    previousCoverAssetId &&
+    (updatedNotebook.coverImageAssetId !== previousCoverAssetId || updatedNotebook.coverMode !== "custom")
+  ) {
+    await deleteAssetById(previousCoverAssetId);
+  }
+
   return updatedNotebook;
 }
 
@@ -294,7 +304,13 @@ export async function attachFilesToNotebook(notebookId: string, files: File[]) {
       createdAt,
     };
 
-    await db.put("notebookAttachments", attachment);
+    try {
+      await db.put("notebookAttachments", attachment);
+    } catch (error) {
+      await deleteAssetById(asset.id);
+      throw toStorageWriteError(error, "добавить файл в блокнот");
+    }
+
     attachments.push(attachment);
   }
 

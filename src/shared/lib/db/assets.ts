@@ -1,4 +1,12 @@
 import { getDatabase } from "@/shared/lib/db/database";
+import {
+  createOversizedAssetError,
+  getStorageEstimateSnapshot,
+  getStoragePressureWarningMessage,
+  SOFT_ASSET_SIZE_LIMIT_BYTES,
+  throwIfLikelyOverQuota,
+  toStorageWriteError,
+} from "@/shared/lib/db/storageErrors";
 import { createId } from "@/shared/lib/utils/id";
 import { AssetKind, StoredAsset } from "@/shared/types/models";
 
@@ -12,6 +20,13 @@ export async function saveBlobAsset(
   kind: AssetKind,
   options?: { name?: string; mimeType?: string },
 ) {
+  if (blob.size > SOFT_ASSET_SIZE_LIMIT_BYTES) {
+    throw createOversizedAssetError(blob.size);
+  }
+
+  const estimate = await getStorageEstimateSnapshot();
+  throwIfLikelyOverQuota("этого вложения", blob.size, estimate.availableBytes);
+
   const db = await getDatabase();
   const asset: StoredAsset = {
     id: createId("asset"),
@@ -24,7 +39,12 @@ export async function saveBlobAsset(
     createdAt: nowIso(),
   };
 
-  await db.put("assets", asset);
+  try {
+    await db.put("assets", asset);
+  } catch (error) {
+    throw toStorageWriteError(error, "сохранить вложение");
+  }
+
   return asset;
 }
 
@@ -35,9 +55,19 @@ export async function saveFileAsset(ownerId: string, file: File, kind: AssetKind
   });
 }
 
+export async function getBlobAssetStorageWarning(blob: Blob, entityLabel: string) {
+  const estimate = await getStorageEstimateSnapshot();
+  return getStoragePressureWarningMessage(entityLabel, blob.size, estimate.availableBytes);
+}
+
 export async function getAssetById(assetId: string) {
   const db = await getDatabase();
   return db.get("assets", assetId);
+}
+
+export async function deleteAssetById(assetId: string) {
+  const db = await getDatabase();
+  await db.delete("assets", assetId);
 }
 
 export async function getAssetObjectUrl(assetId: string) {

@@ -8,6 +8,8 @@ import { getCoverPreset } from "@/shared/config/coverPresets";
 import { notebookStylePresets, notebookTypePresets } from "@/shared/config/notebookPresets";
 import { getPaperPreset } from "@/shared/config/paperPresets";
 import { getToolPreset } from "@/shared/config/toolPresets";
+import { getStorageRecoveryMessage } from "@/shared/lib/db/storageErrors";
+import { getAssetUploadPreflight } from "@/shared/lib/db/storagePreflight";
 import { Notebook } from "@/shared/types/models";
 import {
   BindingPresetId,
@@ -88,6 +90,8 @@ export function CreateNotebookModal({
   const [form, setForm] = useState<NotebookFormState>(buildInitialState(initialValues));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customCoverUrl, setCustomCoverUrl] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [coverNotice, setCoverNotice] = useState<string | null>(null);
   const closeTimeoutRef = useRef<number | null>(null);
 
   const styleCards = useMemo(() => notebookStylePresets, []);
@@ -100,6 +104,8 @@ export function CreateNotebookModal({
   useEffect(() => {
     if (isOpen) {
       setForm(buildInitialState(initialValues));
+      setSubmitError(null);
+      setCoverNotice(null);
     }
   }, [initialValues, isOpen]);
 
@@ -137,30 +143,63 @@ export function CreateNotebookModal({
     const normalizedTitle = form.title.trim() || DEFAULT_NOTEBOOK_TITLE;
 
     setIsSubmitting(true);
+    setSubmitError(null);
 
-    await onCreate({
-      ...form,
-      title: normalizedTitle,
-    });
+    try {
+      await onCreate({
+        ...form,
+        title: normalizedTitle,
+      });
 
-    setIsSubmitting(false);
-    setForm(buildInitialState(initialValues));
+      setForm(buildInitialState(initialValues));
 
-    if (closeDelayMs > 0) {
-      closeTimeoutRef.current = window.setTimeout(() => {
-        closeTimeoutRef.current = null;
-        onClose();
-      }, closeDelayMs);
-      return;
+      if (closeDelayMs > 0) {
+        closeTimeoutRef.current = window.setTimeout(() => {
+          closeTimeoutRef.current = null;
+          onClose();
+        }, closeDelayMs);
+        return;
+      }
+
+      onClose();
+    } catch (error) {
+      console.error("Notebook submit failed", error);
+      setSubmitError(getStorageRecoveryMessage(error, form.coverImage ? "обложку блокнота" : "блокнот"));
+    } finally {
+      setIsSubmitting(false);
     }
-
-    onClose();
   }
 
   function handleCoverImageChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
+
+    if (!file) {
+      updateField("coverImage", null);
+      setCoverNotice(null);
+      return;
+    }
+
+    const preflight = getAssetUploadPreflight(file, "Обложка");
+
+    if (preflight.level === "blocked") {
+      setCoverNotice(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !window.confirm(`${preflight.message}\n\nПродолжить с этой обложкой?`)
+    ) {
+      setCoverNotice(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
     updateField("coverImage", file);
     updateField("coverMode", file ? "custom" : "preset");
+    setCoverNotice(preflight.message);
     event.target.value = "";
   }
 
@@ -231,6 +270,8 @@ export function CreateNotebookModal({
         </aside>
 
         <div className="create-notebook-fields">
+          {submitError ? <div className="inline-notice inline-notice--warning">{submitError}</div> : null}
+          {coverNotice ? <div className="inline-notice inline-notice--warning">{coverNotice}</div> : null}
           <section className="create-notebook-section panel stack">
             <div className="section-head">
               <div>
@@ -326,11 +367,12 @@ export function CreateNotebookModal({
               <span>Обложка</span>
               <CoverPresetPicker
                 selectedId={form.coverPreset}
-                onSelect={(coverPresetId) => {
-                  updateField("coverPreset", coverPresetId);
-                  updateField("coverMode", "preset");
-                  updateField("coverImage", null);
-                }}
+                      onSelect={(coverPresetId) => {
+                        updateField("coverPreset", coverPresetId);
+                        updateField("coverMode", "preset");
+                        updateField("coverImage", null);
+                        setCoverNotice(null);
+                      }}
               />
             </div>
 

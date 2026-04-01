@@ -4,5 +4,6 @@ dist
 Thumbs.db
 .codex
 .local-server
+.local-https
 bak.README.md
 bak.ROADMAP.md

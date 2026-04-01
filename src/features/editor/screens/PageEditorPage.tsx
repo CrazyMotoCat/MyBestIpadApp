@@ -1,4 +1,4 @@
-import { CSSProperties, ChangeEvent, PointerEvent as ReactPointerEvent, TouchEvent, useEffect, useRef, useState } from "react";
+import { CSSProperties, ChangeEvent, Dispatch, PointerEvent as ReactPointerEvent, SetStateAction, TouchEvent, useEffect, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
 import { DrawingCanvas, DrawingCanvasHandle } from "@/features/drawing/components/DrawingCanvas";
@@ -21,9 +21,26 @@ import { PaperPresetPicker } from "@/features/editor/components/PaperPresetPicke
 import { ShapeInsertLibrary } from "@/features/editor/components/ShapeInsertLibrary";
 import { ShapeNoteLayer } from "@/features/editor/components/ShapeNoteLayer";
 import { ToolPresetPicker } from "@/features/editor/components/ToolPresetPicker";
+import { createEditorSelectionController, removeItemById, replaceItemById } from "@/features/editor/lib/interactionState";
+import {
+  clearPageDraftSnapshot,
+  clearPageRecoveryDraft,
+  createPageDraftSnapshot,
+  createPageRecoveryDraft,
+  PageDraftSnapshot,
+  readPageDraftSnapshot,
+  readPageRecoveryDraft,
+  serializePageRecoveryDraft,
+  writePageDraftSnapshot,
+  writePageRecoveryDraft,
+} from "@/features/editor/lib/pageRecoveryDraft";
+import { clampValue, isPointInBounds } from "@/features/editor/lib/transformUtils";
+import { useTextTransformController } from "@/features/editor/lib/useTextTransformController";
 import { getNotebook } from "@/features/notebooks/api/notebooks";
 import { NotebookBinding } from "@/features/notebooks/components/NotebookBinding";
 import { createPage, deletePage, getPage, listPages, setPageBookmark, updatePage } from "@/features/pages/api/pages";
+import { getStorageRecoveryMessage } from "@/shared/lib/db/storageErrors";
+import { getFilesUploadPreflight } from "@/shared/lib/db/storagePreflight";
 import { getToolPreset } from "@/shared/config/toolPresets";
 import { buildPaperStyle } from "@/shared/lib/paper";
 import { DrawingPoint, DrawingStroke, FileAttachmentPageElement, ImagePageElement, Notebook, Page, PageLayout, ShapeNoteElement, TextPageElement } from "@/shared/types/models";
@@ -47,6 +64,10 @@ const sidebarSections = [
 ] as const;
 
 type SidebarSectionId = (typeof sidebarSections)[number]["id"];
+type RecoveryNotice = {
+  source: "snapshot" | "recovery";
+  savedAt: string | null;
+};
 
 const strokeStyleLabels: Record<ToolStrokeStyle, string> = {
   solid: "гладкий",
@@ -73,23 +94,12 @@ const SAVE_STATE_SAVED = "Все изменения сохранены";
 const SAVE_STATE_ERROR = "Ошибка сохранения";
 const DEFAULT_DRAWING_COLOR = "#111111";
 const quickPaletteColors = [DEFAULT_DRAWING_COLOR, "#d7e8ff", "#f8fbff", "#9ed0ff", "#7fffd4", "#d5ff72", "#ffd7b8", "#ff9d8c", "#c9cbc7"];
+const PAGE_DRAFT_SYNC_DELAY_MS = 350;
 
 type CaretDocument = Document & {
   caretPositionFromPoint?: (x: number, y: number) => { offset: number } | null;
   caretRangeFromPoint?: (x: number, y: number) => Range | null;
 };
-
-interface TextDragState {
-  id: string;
-  mode: "move" | "resize";
-  pointerId: number;
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
-  originWidth: number;
-  originHeight: number;
-}
 
 function getMaxElementZIndex(
   images: ImagePageElement[],
@@ -99,10 +109,6 @@ function getMaxElementZIndex(
   return Math.max(0, ...images.map((item) => item.zIndex), ...files.map((item) => item.zIndex), ...shapes.map((item) => item.zIndex));
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
 function isTextTarget(target: EventTarget | null) {
   return target instanceof HTMLElement && Boolean(target.closest("textarea, input, select, [contenteditable='true']"));
 }
@@ -110,7 +116,7 @@ function isTextTarget(target: EventTarget | null) {
 function isOverlayTarget(target: EventTarget | null) {
   return (
     target instanceof HTMLElement &&
-    Boolean(target.closest(".page-media, .shape-note, .bookmark-star, .page-corner, .editor-sheet__dock"))
+    Boolean(target.closest(".page-media, .shape-note, .editor-text-block, .bookmark-star, .page-corner, .editor-sheet__dock"))
   );
 }
 
@@ -143,12 +149,27 @@ function buildEditorTextElement(
   };
 }
 
-function isPointInsideBounds(clientX: number, clientY: number, bounds: DOMRect | null) {
-  if (!bounds) {
-    return false;
+function formatRecoverySavedAt(value: string | null) {
+  if (!value) {
+    return "после перезапуска";
   }
 
-  return clientX >= bounds.left && clientX <= bounds.right && clientY >= bounds.top && clientY <= bounds.bottom;
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "после перезапуска";
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function serializeStrokeDraft(strokes: DrawingStroke[]) {
+  return JSON.stringify(strokes);
 }
 
 export function PageEditorPage() {
@@ -174,10 +195,13 @@ export function PageEditorPage() {
   const zIndexCounterRef = useRef(1);
   const deleteTimeoutRef = useRef<number | null>(null);
   const saveTimeoutRef = useRef<number | null>(null);
+  const draftSnapshotTimeoutRef = useRef<number | null>(null);
   const draftStrokesRef = useRef<DrawingStroke[]>([]);
   const hasPendingStrokeSaveRef = useRef(false);
+  const mediaDraftReaderRef = useRef<(() => { images: ImagePageElement[]; files: FileAttachmentPageElement[] }) | null>(null);
+  const shapeDraftReaderRef = useRef<(() => ShapeNoteElement[]) | null>(null);
   const lastTextEraseSignatureRef = useRef<string | null>(null);
-  const textDragRef = useRef<TextDragState | null>(null);
+  const persistedPageSnapshotRef = useRef<string | null>(null);
 
   const [notebook, setNotebook] = useState<Notebook | null>(null);
   const [page, setPage] = useState<Page | null>(null);
@@ -218,6 +242,8 @@ export function PageEditorPage() {
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [palettePopoverPosition, setPalettePopoverPosition] = useState({ top: 0, left: 0 });
   const [keyboardPaletteBottomOffset, setKeyboardPaletteBottomOffset] = useState(18);
+  const [assetStorageError, setAssetStorageError] = useState<string | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<RecoveryNotice | null>(null);
 
   const toolPreset = getToolPreset(selectedToolId);
   const navigationBlocker = useBlocker(({ historyAction }) => historyAction === "POP");
@@ -228,6 +254,20 @@ export function PageEditorPage() {
   const paletteLabel = activeKeyboardTextElement ? "Изменить цвет текста" : "Изменить цвет пера";
   const paletteDialogLabel = activeKeyboardTextElement ? "Выбор цвета текста" : "Выбор цвета пера";
   const isPaletteDisabled = isEraserActive && !activeKeyboardTextElement;
+  const hasActiveObjectSelection = Boolean(activeElementId || activeTextElementId);
+  const { clearActiveObjectSelection, closeActiveTextEditing, releaseSelectionForElement, selectOverlayElement, selectTextElement } =
+    createEditorSelectionController({
+      activeTextElementId,
+      textInputRefs: textInputRefs.current,
+      setActiveElementId,
+      setActiveTextElementId,
+      setIsKeyboardTextMode,
+      setIsPaletteOpen,
+      setIsTrashHover,
+      setSwipePreviewDirection,
+      setSwipePreviewProgress,
+      setSwipePreviewOffsetX,
+    });
   const currentPageIndex = page ? pages.findIndex((item) => item.id === page.id) : -1;
   const canGoPrev = currentPageIndex > 0;
   const nextPageLabel = currentPageIndex >= 0 && currentPageIndex < pages.length - 1 ? "Следующая" : "Новый лист";
@@ -238,6 +278,86 @@ export function PageEditorPage() {
       : saveState === SAVE_STATE_ERROR
         ? "editor-sheet__status-pill--error"
         : "editor-sheet__status-pill--save";
+
+  function buildPageDraftSnapshot(targetPageId: string, nextStrokes = draftStrokesRef.current): PageDraftSnapshot {
+    return createPageDraftSnapshot({
+      ...buildPageRecoveryDraftState(targetPageId),
+      strokes: nextStrokes.map((stroke) => ({
+        ...stroke,
+        pageId: targetPageId,
+      })),
+    });
+  }
+
+  function getCurrentOverlayDraftState() {
+    const mediaDraft = mediaDraftReaderRef.current?.();
+    const shapeDraft = shapeDraftReaderRef.current?.();
+
+    return {
+      images: mediaDraft?.images ?? images,
+      files: mediaDraft?.files ?? files,
+      shapes: shapeDraft ?? shapes,
+    };
+  }
+
+  function buildPageRecoveryDraftState(targetPageId: string) {
+    const overlayDrafts = getCurrentOverlayDraftState();
+
+    return createPageRecoveryDraft({
+      pageId: targetPageId,
+      title,
+      paperType,
+      paperColor,
+      layout,
+      textElements,
+      images: overlayDrafts.images,
+      files: overlayDrafts.files,
+      shapes: overlayDrafts.shapes,
+    });
+  }
+
+  function buildPersistPageInput() {
+    return {
+      title,
+      paperType,
+      paperColor,
+      layout,
+    };
+  }
+
+  function flushPageDraftSnapshot(targetPageId = pageId, options?: { syncCanvas?: boolean }) {
+    if (!targetPageId || !hydratedRef.current) {
+      return;
+    }
+
+    if (options?.syncCanvas) {
+      syncDraftStrokesFromCanvas();
+    }
+
+    writePageDraftSnapshot(targetPageId, buildPageDraftSnapshot(targetPageId));
+  }
+
+  function schedulePageDraftSnapshotFlush(targetPageId = pageId, options?: { syncCanvas?: boolean }) {
+    if (!targetPageId || !hydratedRef.current) {
+      return;
+    }
+
+    if (draftSnapshotTimeoutRef.current !== null) {
+      window.clearTimeout(draftSnapshotTimeoutRef.current);
+    }
+
+    draftSnapshotTimeoutRef.current = window.setTimeout(() => {
+      draftSnapshotTimeoutRef.current = null;
+      const persistedShellSnapshot = serializePageRecoveryDraft(buildPageRecoveryDraftState(targetPageId));
+
+      if (!hasPendingStrokeSaveRef.current && persistedPageSnapshotRef.current === persistedShellSnapshot) {
+        clearPageDraftSnapshot(targetPageId);
+        return;
+      }
+
+      flushPageDraftSnapshot(targetPageId, options);
+    }, PAGE_DRAFT_SYNC_DELAY_MS);
+  }
 
   async function loadPage(targetPageId: string) {
     const pageRecord = await getPage(targetPageId);
@@ -253,25 +373,50 @@ export function PageEditorPage() {
 
     await ensureDrawingLayer(targetPageId, notebookRecord?.defaultTool ?? "ballpoint");
 
+    const baseTextElements = bundle.textElements.map((item) =>
+      buildEditorTextElement(targetPageId, item, notebookRecord?.bindingType, textColor),
+    );
+    const pageDraftSnapshot = readPageDraftSnapshot(targetPageId);
+    const recoveryDraft = readPageRecoveryDraft(targetPageId);
+    const nextTitle = pageDraftSnapshot?.title ?? recoveryDraft?.title ?? pageRecord.title;
+    const nextPaperType = pageDraftSnapshot?.paperType ?? recoveryDraft?.paperType ?? pageRecord.paperType;
+    const nextPaperColor = pageDraftSnapshot?.paperColor ?? recoveryDraft?.paperColor ?? pageRecord.paperColor;
+    const nextLayout = pageDraftSnapshot?.layout ?? recoveryDraft?.layout ?? pageRecord.layout;
+    const nextTextElements =
+      pageDraftSnapshot?.textElements.map((item) => buildEditorTextElement(targetPageId, item, notebookRecord?.bindingType, textColor)) ??
+      recoveryDraft?.textElements.map((item) => buildEditorTextElement(targetPageId, item, notebookRecord?.bindingType, textColor)) ??
+      baseTextElements;
+    const nextStrokes = pageDraftSnapshot?.strokes ?? bundle.strokes;
+    const nextImages = pageDraftSnapshot?.images ?? recoveryDraft?.images ?? bundle.images;
+    const nextFiles = pageDraftSnapshot?.files ?? recoveryDraft?.files ?? bundle.files;
+    const nextShapes = pageDraftSnapshot?.shapes ?? recoveryDraft?.shapes ?? bundle.shapes;
+    const hasRecoveredDrawingDraft =
+      pageDraftSnapshot !== null && serializeStrokeDraft(pageDraftSnapshot.strokes) !== serializeStrokeDraft(bundle.strokes);
+    const nextRecoveryNotice = pageDraftSnapshot
+      ? { source: "snapshot" as const, savedAt: pageDraftSnapshot.savedAt ?? null }
+      : recoveryDraft
+        ? { source: "recovery" as const, savedAt: null }
+        : null;
+
     setPage(pageRecord);
     setNotebook(notebookRecord ?? null);
     setPages(notebookPages);
-    setTitle(pageRecord.title);
-    setPaperType(pageRecord.paperType);
-    setPaperColor(pageRecord.paperColor);
-    setLayout(pageRecord.layout);
-    setTextElements(bundle.textElements.map((item) => buildEditorTextElement(targetPageId, item, notebookRecord?.bindingType, textColor)));
-    setStrokes(bundle.strokes);
-    draftStrokesRef.current = bundle.strokes;
-    setImages(bundle.images);
-    setFiles(bundle.files);
-    setShapes(bundle.shapes);
+    setTitle(nextTitle);
+    setPaperType(nextPaperType);
+    setPaperColor(nextPaperColor);
+    setLayout(nextLayout);
+    setTextElements(nextTextElements);
+    setStrokes(nextStrokes);
+    draftStrokesRef.current = nextStrokes;
+    setImages(nextImages);
+    setFiles(nextFiles);
+    setShapes(nextShapes);
     setActiveElementId(null);
     setActiveTextElementId(null);
     setIsDeletingPage(false);
     setPageDeleteOffset({ x: 0, y: 0 });
     setIsKeyboardTextMode(false);
-    zIndexCounterRef.current = getMaxElementZIndex(bundle.images, bundle.files, bundle.shapes) + 1;
+    zIndexCounterRef.current = getMaxElementZIndex(nextImages, nextFiles, nextShapes) + 1;
 
     const initialTool = notebookRecord?.defaultTool ?? "ballpoint";
     const preset = getToolPreset(initialTool);
@@ -283,8 +428,22 @@ export function PageEditorPage() {
     setToolOpacity(preset.defaultOpacity);
     setInsertPaperStyle(pageRecord.paperType);
     setInsertColor(pageRecord.paperColor);
-    hasPendingStrokeSaveRef.current = false;
-    setSaveState(SAVE_STATE_SAVED);
+    hasPendingStrokeSaveRef.current = hasRecoveredDrawingDraft;
+    persistedPageSnapshotRef.current = serializePageRecoveryDraft(
+      createPageRecoveryDraft({
+        pageId: targetPageId,
+        title: pageRecord.title,
+        paperType: pageRecord.paperType,
+        paperColor: pageRecord.paperColor,
+        layout: pageRecord.layout,
+        textElements: baseTextElements,
+        images: bundle.images,
+        files: bundle.files,
+        shapes: bundle.shapes,
+      }),
+    );
+    setSaveState(recoveryDraft || pageDraftSnapshot ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
+    setRecoveryNotice(nextRecoveryNotice);
     setStatus("ready");
     hydratedRef.current = true;
   }
@@ -322,6 +481,10 @@ export function PageEditorPage() {
 
       if (saveTimeoutRef.current !== null) {
         window.clearTimeout(saveTimeoutRef.current);
+      }
+
+      if (draftSnapshotTimeoutRef.current !== null) {
+        window.clearTimeout(draftSnapshotTimeoutRef.current);
       }
 
     };
@@ -427,7 +590,60 @@ export function PageEditorPage() {
         saveTimeoutRef.current = null;
       }
     };
-  }, [layout, pageId, paperColor, paperType, textElements, title]);
+  }, [files, images, layout, pageId, paperColor, paperType, shapes, textElements, title]);
+
+  useEffect(() => {
+    if (!pageId || !hydratedRef.current) {
+      return;
+    }
+
+    const currentSnapshot = serializePageRecoveryDraft(buildPageRecoveryDraftState(pageId));
+
+    if (persistedPageSnapshotRef.current === currentSnapshot) {
+      clearPageRecoveryDraft(pageId);
+      return;
+    }
+
+    writePageRecoveryDraft(pageId, buildPageRecoveryDraftState(pageId));
+  }, [files, images, layout, pageId, paperColor, paperType, shapes, textElements, title]);
+
+  useEffect(() => {
+    if (!pageId || !hydratedRef.current) {
+      return;
+    }
+
+    schedulePageDraftSnapshotFlush(pageId);
+
+    return () => {
+      if (draftSnapshotTimeoutRef.current !== null) {
+        window.clearTimeout(draftSnapshotTimeoutRef.current);
+        draftSnapshotTimeoutRef.current = null;
+      }
+    };
+  }, [files, images, layout, pageId, paperColor, paperType, shapes, strokes, textElements, title]);
+
+  useEffect(() => {
+    if (!pageId) {
+      return;
+    }
+
+    function handlePageVisibilitySync() {
+      if (document.visibilityState === "hidden") {
+        flushPageDraftSnapshot(pageId, { syncCanvas: true });
+      }
+    }
+
+    function handlePageHide() {
+      flushPageDraftSnapshot(pageId, { syncCanvas: true });
+    }
+
+    document.addEventListener("visibilitychange", handlePageVisibilitySync);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", handlePageVisibilitySync);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [pageId, title, paperType, paperColor, layout, textElements]);
 
   async function persistPageChanges(options?: { includeDraftStrokes?: boolean }) {
     if (!pageId || !hydratedRef.current) {
@@ -442,12 +658,7 @@ export function PageEditorPage() {
     }
 
     try {
-      await updatePage(pageId, {
-        title,
-        paperType,
-        paperColor,
-        layout,
-      });
+      await updatePage(pageId, buildPersistPageInput());
       await replaceTextElements(pageId, textElements);
       if (includeDraftStrokes) {
         await replaceDrawingStrokes(
@@ -472,11 +683,36 @@ export function PageEditorPage() {
             }
           : currentPage,
       );
+      persistedPageSnapshotRef.current = serializePageRecoveryDraft(buildPageRecoveryDraftState(pageId));
+      clearPageRecoveryDraft(pageId);
+      if (!hasPendingStrokeSaveRef.current) {
+        clearPageDraftSnapshot(pageId);
+      }
       setSaveState(hasPendingStrokeSaveRef.current ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
+      setRecoveryNotice(null);
     } catch (error) {
       console.error("Save failed", error);
       setSaveState(SAVE_STATE_ERROR);
     }
+  }
+
+  function handleDismissRecoveryNotice() {
+    setRecoveryNotice(null);
+  }
+
+  async function handleResetRecoveredDraft() {
+    if (!pageId) {
+      return;
+    }
+
+    clearPageRecoveryDraft(pageId);
+    clearPageDraftSnapshot(pageId);
+    draftStrokesRef.current = [];
+    hasPendingStrokeSaveRef.current = false;
+    setRecoveryNotice(null);
+    hydratedRef.current = false;
+    setStatus("loading");
+    await loadPage(pageId);
   }
 
   function handleManualSave() {
@@ -495,13 +731,44 @@ export function PageEditorPage() {
     }
   }
 
+  function handleDrawingStrokesChange(nextStrokes: DrawingStroke[]) {
+    draftStrokesRef.current = nextStrokes;
+    hasPendingStrokeSaveRef.current = true;
+    setStrokes([...nextStrokes]);
+  }
+
   async function handleImagesChange(event: ChangeEvent<HTMLInputElement>) {
     if (!pageId || !event.target.files?.length) {
       return;
     }
 
-    for (const file of Array.from(event.target.files)) {
-      await addImageToPage(pageId, file);
+    const files = Array.from(event.target.files);
+    const preflight = getFilesUploadPreflight(files, "изображений");
+
+    if (preflight.level === "blocked") {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !window.confirm(`${preflight.message}\n\nПродолжить добавление изображений?`)
+    ) {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      for (const file of files) {
+        await addImageToPage(pageId, file);
+      }
+      setAssetStorageError(null);
+    } catch (error) {
+      console.error("Image upload failed", error);
+      setAssetStorageError(getStorageRecoveryMessage(error, "изображение"));
     }
 
     event.target.value = "";
@@ -514,8 +781,33 @@ export function PageEditorPage() {
       return;
     }
 
-    for (const file of Array.from(event.target.files)) {
-      await addFileToPage(pageId, file);
+    const files = Array.from(event.target.files);
+    const preflight = getFilesUploadPreflight(files, "файлов страницы");
+
+    if (preflight.level === "blocked") {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !window.confirm(`${preflight.message}\n\nПродолжить добавление файлов?`)
+    ) {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      for (const file of files) {
+        await addFileToPage(pageId, file);
+      }
+      setAssetStorageError(null);
+    } catch (error) {
+      console.error("File upload failed", error);
+      setAssetStorageError(getStorageRecoveryMessage(error, "файл"));
     }
 
     event.target.value = "";
@@ -544,21 +836,21 @@ export function PageEditorPage() {
 
   function promoteShape(shape: ShapeNoteElement) {
     const promotedShape = { ...shape, zIndex: zIndexCounterRef.current++ };
-    setActiveElementId(promotedShape.id);
+    selectOverlayElement(promotedShape.id);
     setShapes((current) => current.map((item) => (item.id === promotedShape.id ? promotedShape : item)));
     return promotedShape;
   }
 
   function promoteImage(image: ImagePageElement) {
     const promotedImage = { ...image, zIndex: zIndexCounterRef.current++ };
-    setActiveElementId(promotedImage.id);
+    selectOverlayElement(promotedImage.id);
     setImages((current) => current.map((item) => (item.id === promotedImage.id ? promotedImage : item)));
     return promotedImage;
   }
 
   function promoteFile(file: FileAttachmentPageElement) {
     const promotedFile = { ...file, zIndex: zIndexCounterRef.current++ };
-    setActiveElementId(promotedFile.id);
+    selectOverlayElement(promotedFile.id);
     setFiles((current) => current.map((item) => (item.id === promotedFile.id ? promotedFile : item)));
     return promotedFile;
   }
@@ -568,14 +860,11 @@ export function PageEditorPage() {
   }
 
   function handleShapeCommit(nextShape: ShapeNoteElement) {
-    setShapes((current) => current.map((item) => (item.id === nextShape.id ? nextShape : item)));
-    void updateShapeNote(nextShape);
+    commitOverlayElement(setShapes, nextShape, (item) => void updateShapeNote(item));
   }
 
   function handleShapeDelete(shapeId: string) {
-    setShapes((current) => current.filter((item) => item.id !== shapeId));
-    setActiveElementId((current) => (current === shapeId ? null : current));
-    void deletePageElement(shapeId);
+    deleteOverlayElement(setShapes, shapeId);
   }
 
   function handleImageChange(nextImage: ImagePageElement) {
@@ -583,14 +872,11 @@ export function PageEditorPage() {
   }
 
   function handleImageCommit(nextImage: ImagePageElement) {
-    setImages((current) => current.map((item) => (item.id === nextImage.id ? nextImage : item)));
-    void updatePageElement(nextImage);
+    commitOverlayElement(setImages, nextImage, (item) => void updatePageElement(item));
   }
 
   function handleImageDelete(imageId: string) {
-    setImages((current) => current.filter((item) => item.id !== imageId));
-    setActiveElementId((current) => (current === imageId ? null : current));
-    void deletePageElement(imageId);
+    deleteOverlayElement(setImages, imageId);
   }
 
   function handleFileChange(nextFile: FileAttachmentPageElement) {
@@ -598,14 +884,11 @@ export function PageEditorPage() {
   }
 
   function handleFileCommit(nextFile: FileAttachmentPageElement) {
-    setFiles((current) => current.map((item) => (item.id === nextFile.id ? nextFile : item)));
-    void updatePageElement(nextFile);
+    commitOverlayElement(setFiles, nextFile, (item) => void updatePageElement(item));
   }
 
   function handleFileDelete(fileId: string) {
-    setFiles((current) => current.filter((item) => item.id !== fileId));
-    setActiveElementId((current) => (current === fileId ? null : current));
-    void deletePageElement(fileId);
+    deleteOverlayElement(setFiles, fileId);
   }
 
   function getTrashBounds() {
@@ -700,6 +983,50 @@ export function PageEditorPage() {
     setIsPaletteOpen(false);
   }
 
+  function commitOverlayElement<T extends { id: string }>(
+    updater: Dispatch<SetStateAction<T[]>>,
+    nextItem: T,
+    persist: (item: T) => void,
+  ) {
+    updater((current) => replaceItemById(current, nextItem));
+    persist(nextItem);
+    selectOverlayElement(nextItem.id);
+  }
+
+  function deleteOverlayElement<T extends { id: string }>(updater: Dispatch<SetStateAction<T[]>>, targetId: string) {
+    updater((current) => removeItemById(current, targetId));
+    releaseSelectionForElement(targetId);
+    void deletePageElement(targetId);
+  }
+
+  function commitTextElement(nextItem: TextPageElement, options?: { editing?: boolean }) {
+    setTextElements((current) => replaceItemById(current, nextItem));
+    selectTextElement(nextItem.id, { editing: options?.editing ?? false });
+  }
+
+  function deleteTextElement(targetId: string) {
+    releaseSelectionForElement(targetId);
+    delete textInputRefs.current[targetId];
+    setTextElements((current) => removeItemById(current, targetId));
+  }
+
+  const { handleTextDragEnd, handleTextDragMove, handleTextDragStart, handleTextResizeStart } = useTextTransformController({
+    closeActiveTextEditing,
+    commitTextElement,
+    deleteTextElement,
+    getPageBounds: () => sheetPageRef.current?.getBoundingClientRect() ?? null,
+    getTextElement: (targetId) => textElements.find((item) => item.id === targetId) ?? null,
+    getTrashBounds,
+    maxTextBlockWidth: TEXT_BLOCK_MAX_WIDTH,
+    minTextBlockHeight: TEXT_BLOCK_MIN_HEIGHT,
+    minTextBlockWidth: TEXT_BLOCK_MIN_WIDTH,
+    promoteTextElement,
+    selectTextElement: (targetId) => selectTextElement(targetId),
+    setIsObjectDragging,
+    setIsTrashHover,
+    setTextElements,
+  });
+
   function handleGoToNotebooks() {
     navigate("/", { replace: true });
   }
@@ -707,14 +1034,7 @@ export function PageEditorPage() {
   function handleToolSelect(toolId: ToolPresetId) {
     if (toolId === "eraser") {
       setActiveSection(null);
-      setIsKeyboardTextMode(false);
-      if (activeTextElementId) {
-        textInputRefs.current[activeTextElementId]?.blur();
-      }
-      setActiveTextElementId(null);
-      setActiveElementId(null);
-      setSwipePreviewDirection("");
-      setSwipePreviewProgress(0);
+      clearActiveObjectSelection();
     }
 
     setSelectedToolId(toolId);
@@ -722,14 +1042,7 @@ export function PageEditorPage() {
 
   function toggleEraser() {
     setActiveSection(null);
-    setIsKeyboardTextMode(false);
-    if (activeTextElementId) {
-      textInputRefs.current[activeTextElementId]?.blur();
-    }
-    setActiveTextElementId(null);
-    setActiveElementId(null);
-    setSwipePreviewDirection("");
-    setSwipePreviewProgress(0);
+    clearActiveObjectSelection();
     setSelectedToolId((currentToolId) => (currentToolId === "eraser" ? lastDrawingToolId : "eraser"));
   }
 
@@ -743,6 +1056,7 @@ export function PageEditorPage() {
 
   function clearDrawingLayer() {
     draftStrokesRef.current = [];
+    hasPendingStrokeSaveRef.current = true;
     setStrokes([]);
   }
 
@@ -788,7 +1102,7 @@ export function PageEditorPage() {
   }
 
   async function triggerFlip(direction: "prev" | "next") {
-    if (!page || !notebook || isDeletingPage) {
+    if (!page || !notebook || isDeletingPage || isObjectTransforming() || hasActiveObjectSelection || isTextEditingMode()) {
       return;
     }
 
@@ -823,25 +1137,21 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchStart(event: TouchEvent<HTMLDivElement>) {
-    if (isDeletingPage || isPenInteractionLocked() || isOverlayTarget(event.target) || event.touches.length !== 1) {
-      touchStartXRef.current = null;
-      touchStartYRef.current = null;
-      touchStartTimeRef.current = null;
-      setSwipePreviewDirection("");
-      setSwipePreviewProgress(0);
-      setSwipePreviewOffsetX(0);
+    if (!canStartSheetTouchGesture(event.target, event.touches.length)) {
+      resetTouchFlipGesture();
+      return;
+    }
+
+    if (hasActiveObjectSelection) {
+      clearActiveObjectSelection();
+      resetTouchFlipGesture();
       return;
     }
 
     const touch = event.touches[0];
 
     if (!touch || !isBottomFlipZone(touch.clientY)) {
-      touchStartXRef.current = null;
-      touchStartYRef.current = null;
-      touchStartTimeRef.current = null;
-      setSwipePreviewDirection("");
-      setSwipePreviewProgress(0);
-      setSwipePreviewOffsetX(0);
+      resetTouchFlipGesture();
       return;
     }
 
@@ -851,14 +1161,21 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchMove(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage || isPenInteractionLocked()) {
+    if (shouldAbortSheetTouchGesture()) {
       return;
     }
 
-    const currentX = event.touches[0]?.clientX ?? touchStartXRef.current;
-    const currentY = event.touches[0]?.clientY ?? touchStartYRef.current ?? 0;
-    const deltaX = currentX - touchStartXRef.current;
-    const deltaY = currentY - (touchStartYRef.current ?? currentY);
+    const startX = touchStartXRef.current;
+    const startY = touchStartYRef.current;
+
+    if (startX === null) {
+      return;
+    }
+
+    const currentX = event.touches[0]?.clientX ?? startX;
+    const currentY = event.touches[0]?.clientY ?? startY ?? 0;
+    const deltaX = currentX - startX;
+    const deltaY = currentY - (startY ?? currentY);
 
     if (Math.abs(deltaX) < 20 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) {
       setSwipePreviewDirection("");
@@ -872,7 +1189,7 @@ export function PageEditorPage() {
     const bounds = sheetPageRef.current?.getBoundingClientRect();
     const travelDistance = Math.max(220, (bounds?.width ?? 0) * 0.42);
     const progress = Math.min(Math.abs(deltaX) / travelDistance, 1);
-    const clampedOffsetX = clamp(deltaX, -travelDistance, travelDistance);
+    const clampedOffsetX = clampValue(deltaX, -travelDistance, travelDistance);
 
     setSwipePreviewDirection(direction);
     setSwipePreviewProgress(progress);
@@ -880,34 +1197,35 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchEnd(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectDragging || isDeletingPage || isPenInteractionLocked()) {
+    if (shouldAbortSheetTouchGesture()) {
       return;
     }
 
-    const endX = event.changedTouches[0]?.clientX ?? touchStartXRef.current;
-    const endY = event.changedTouches[0]?.clientY ?? touchStartYRef.current ?? 0;
-    const delta = endX - touchStartXRef.current;
-    const deltaY = endY - (touchStartYRef.current ?? endY);
+    const startX = touchStartXRef.current;
+    const startY = touchStartYRef.current;
+
+    if (startX === null) {
+      return;
+    }
+
+    const endX = event.changedTouches[0]?.clientX ?? startX;
+    const endY = event.changedTouches[0]?.clientY ?? startY ?? 0;
+    const delta = endX - startX;
+    const deltaY = endY - (startY ?? endY);
     const gestureDuration = touchStartTimeRef.current === null ? 0 : performance.now() - touchStartTimeRef.current;
     const bounds = sheetPageRef.current?.getBoundingClientRect();
     const travelDistance = Math.max(220, (bounds?.width ?? 0) * 0.42);
     const releaseProgress = Math.min(Math.abs(delta) / travelDistance, 1);
-    touchStartXRef.current = null;
-    touchStartYRef.current = null;
-    touchStartTimeRef.current = null;
+    resetTouchFlipGesture();
 
     if (
       releaseProgress < PAGE_FLIP_RELEASE_THRESHOLD ||
       Math.abs(delta) <= Math.abs(deltaY) * 1.2 ||
       gestureDuration < PAGE_FLIP_MIN_GESTURE_MS
     ) {
-      setSwipePreviewDirection("");
-      setSwipePreviewProgress(0);
-      setSwipePreviewOffsetX(0);
       return;
     }
 
-    setSwipePreviewOffsetX(0);
     if (delta > 0) {
       void triggerFlip("prev");
     } else {
@@ -946,6 +1264,90 @@ export function PageEditorPage() {
     return drawingPointerIdRef.current !== null || recentPenInteractionUntilRef.current > Date.now();
   }
 
+  function isDrawingPointer(pointerType: ReactPointerEvent<HTMLElement>["pointerType"], altKey = false) {
+    return pointerType === "pen" || (pointerType === "mouse" && altKey);
+  }
+
+  function isTextEditingMode() {
+    return Boolean(activeTextElementId && isKeyboardTextMode);
+  }
+
+  function isObjectTransforming() {
+    return isObjectDragging;
+  }
+
+  function isDrawingInteractionActive() {
+    return drawingPointerIdRef.current !== null || isPenInteractionLocked();
+  }
+
+  function isIdleForNewText() {
+    return !isTextEditingMode() && !isObjectTransforming() && !isDrawingInteractionActive() && !hasActiveObjectSelection && !isDeletingPage;
+  }
+
+  function shouldRoutePointerToTextEraser() {
+    return isEraserActive;
+  }
+
+  function shouldBlockKeyboardTextEntry(pointerType: ReactPointerEvent<HTMLElement>["pointerType"]) {
+    return isDrawingPointer(pointerType);
+  }
+
+  function shouldCaptureTextLayerPointer(pointerType: ReactPointerEvent<HTMLElement>["pointerType"]) {
+    return shouldRoutePointerToTextEraser() || shouldBlockKeyboardTextEntry(pointerType);
+  }
+
+  function shouldHandleBottomFlipTouch(pointerType: ReactPointerEvent<HTMLDivElement>["pointerType"], clientY: number) {
+    return pointerType === "touch" && isBottomFlipZone(clientY);
+  }
+
+  function resetTouchFlipGesture() {
+    touchStartXRef.current = null;
+    touchStartYRef.current = null;
+    touchStartTimeRef.current = null;
+    setSwipePreviewDirection("");
+    setSwipePreviewProgress(0);
+    setSwipePreviewOffsetX(0);
+  }
+
+  function canStartSheetTouchGesture(target: EventTarget | null, touchesLength: number) {
+    return !isDeletingPage && !isDrawingInteractionActive() && !isOverlayTarget(target) && touchesLength === 1;
+  }
+
+  function shouldAbortSheetTouchGesture() {
+    return touchStartXRef.current === null || isObjectTransforming() || isDeletingPage || isDrawingInteractionActive();
+  }
+
+  function canCreateTextFromSheetPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    if (isDrawingPointer(event.pointerType, event.altKey)) {
+      return false;
+    }
+
+    if (hasActiveObjectSelection || !isIdleForNewText()) {
+      return false;
+    }
+
+    return Boolean(pageId);
+  }
+
+  function buildNewTextElementAtPoint(clientX: number, clientY: number) {
+    if (!pageId) {
+      return null;
+    }
+
+    const frame = getTextElementFrameAtPoint(clientX, clientY);
+
+    if (!frame) {
+      return null;
+    }
+
+    return {
+      ...buildEditorTextElement(pageId, null, notebook?.bindingType, textColor),
+      id: createId("element"),
+      ...frame,
+      zIndex: zIndexCounterRef.current++,
+    };
+  }
+
   function getTextElementFrameAtPoint(clientX: number, clientY: number) {
     const bounds = sheetPageRef.current?.getBoundingClientRect();
     const point = getStagePoint(clientX, clientY);
@@ -968,6 +1370,34 @@ export function PageEditorPage() {
     pendingTextFocusIdRef.current = targetId;
     setActiveTextElementId(targetId);
     setIsKeyboardTextMode(true);
+  }
+
+  function beginKeyboardEditing(targetId: string) {
+    selectTextElement(targetId);
+
+    if (!focusTextInput(targetId)) {
+      enableKeyboardTextMode(targetId);
+      return;
+    }
+
+    selectTextElement(targetId, { editing: true });
+    enableKeyboardTextMode(targetId);
+  }
+
+  function deactivateKeyboardEditing(targetId: string, options?: { blur?: boolean; keepSelection?: boolean }) {
+    if (!options?.keepSelection && activeTextElementId === targetId) {
+      setIsKeyboardTextMode(false);
+    }
+
+    const textArea = textInputRefs.current[targetId];
+    textArea?.setAttribute("inputmode", "none");
+
+    if (textArea) {
+      textArea.readOnly = true;
+      if (options?.blur) {
+        textArea.blur();
+      }
+    }
   }
 
   function focusTextInput(targetId: string) {
@@ -1026,13 +1456,14 @@ export function PageEditorPage() {
     );
   }
 
-  function resetTextDragTrashState() {
-    setIsObjectDragging(false);
-    setIsTrashHover(false);
-  }
-
   function handleTextElementChange(targetId: string, content: string) {
-    setTextElements((current) => current.map((item) => (item.id === targetId ? { ...item, content } : item)));
+    const targetElement = textElements.find((item) => item.id === targetId);
+
+    if (!targetElement) {
+      return;
+    }
+
+    commitTextElement({ ...targetElement, content }, { editing: true });
     window.requestAnimationFrame(() => {
       syncTextElementSize(targetId);
     });
@@ -1058,110 +1489,6 @@ export function PageEditorPage() {
     return promotedElement;
   }
 
-  function beginTextTransform(targetId: string, mode: "move" | "resize", event: ReactPointerEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const targetElement = textElements.find((item) => item.id === targetId);
-
-    if (!targetElement) {
-      return;
-    }
-
-    if (activeTextElementId) {
-      textInputRefs.current[activeTextElementId]?.blur();
-    }
-
-    setIsKeyboardTextMode(false);
-    setActiveTextElementId(null);
-    setActiveElementId(null);
-    const promotedElement = promoteTextElement(targetId) ?? targetElement;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setIsObjectDragging(mode === "move");
-    setIsTrashHover(false);
-    textDragRef.current = {
-      id: targetId,
-      mode,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: promotedElement.x,
-      originY: promotedElement.y,
-      originWidth: promotedElement.width,
-      originHeight: promotedElement.height,
-    };
-  }
-
-  function handleTextDragStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    beginTextTransform(targetId, "move", event);
-  }
-
-  function handleTextResizeStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    beginTextTransform(targetId, "resize", event);
-  }
-
-  function handleTextDragMove(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    const dragState = textDragRef.current;
-
-    if (!dragState || dragState.id !== targetId || dragState.pointerId !== event.pointerId) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    const targetElement = textElements.find((item) => item.id === targetId);
-    const bounds = sheetPageRef.current?.getBoundingClientRect();
-
-    if (!targetElement || !bounds) {
-      return;
-    }
-
-    if (dragState.mode === "move") {
-      const maxX = Math.max(0, bounds.width - targetElement.width);
-      const maxY = Math.max(0, bounds.height - targetElement.height);
-      const nextX = clamp(dragState.originX + (event.clientX - dragState.startX), 0, maxX);
-      const nextY = clamp(dragState.originY + (event.clientY - dragState.startY), 0, maxY);
-      setIsObjectDragging(true);
-      setIsTrashHover(isPointInsideBounds(event.clientX, event.clientY, getTrashBounds()));
-
-      setTextElements((current) =>
-        current.map((item) => (item.id === targetId ? { ...item, x: nextX, y: nextY } : item)),
-      );
-      return;
-    }
-
-    const maxWidth = Math.max(TEXT_BLOCK_MIN_WIDTH, Math.min(TEXT_BLOCK_MAX_WIDTH, bounds.width - targetElement.x));
-    const maxHeight = Math.max(TEXT_BLOCK_MIN_HEIGHT, bounds.height - targetElement.y);
-    const nextWidth = clamp(dragState.originWidth + (event.clientX - dragState.startX), TEXT_BLOCK_MIN_WIDTH, maxWidth);
-    const nextHeight = clamp(dragState.originHeight + (event.clientY - dragState.startY), TEXT_BLOCK_MIN_HEIGHT, maxHeight);
-
-    setTextElements((current) =>
-      current.map((item) => (item.id === targetId ? { ...item, width: nextWidth, height: nextHeight } : item)),
-    );
-  }
-
-  function handleTextDragEnd(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    const dragState = textDragRef.current;
-
-    if (!dragState || dragState.id !== targetId || dragState.pointerId !== event.pointerId) {
-      return;
-    }
-
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    const shouldDelete = dragState.mode === "move" && isPointInsideBounds(event.clientX, event.clientY, getTrashBounds());
-    textDragRef.current = null;
-    resetTextDragTrashState();
-
-    if (shouldDelete) {
-      eraseTextElement(targetId);
-    }
-  }
-
   function getTextEraseIndex(textArea: HTMLTextAreaElement, clientX: number, clientY: number) {
     const caretDocument = document as CaretDocument;
     const content = textArea.value;
@@ -1174,7 +1501,7 @@ export function PageEditorPage() {
       const position = caretDocument.caretPositionFromPoint(clientX, clientY);
 
       if (position) {
-        return clamp(position.offset, 0, content.length);
+        return clampValue(position.offset, 0, content.length);
       }
     }
 
@@ -1182,7 +1509,7 @@ export function PageEditorPage() {
       const range = caretDocument.caretRangeFromPoint(clientX, clientY);
 
       if (range) {
-        return clamp(range.startOffset, 0, content.length);
+        return clampValue(range.startOffset, 0, content.length);
       }
     }
 
@@ -1200,7 +1527,7 @@ export function PageEditorPage() {
     const localY = Math.max(0, clientY - bounds.top - paddingTop + textArea.scrollTop);
     const targetLineIndex = Math.max(0, Math.floor(localY / lineHeight));
     const lines = content.split("\n");
-    const safeLineIndex = clamp(targetLineIndex, 0, Math.max(lines.length - 1, 0));
+    const safeLineIndex = clampValue(targetLineIndex, 0, Math.max(lines.length - 1, 0));
     const targetLine = lines[safeLineIndex] ?? "";
     let offset = 0;
 
@@ -1209,11 +1536,11 @@ export function PageEditorPage() {
     }
 
     if (!targetLine.length) {
-      return clamp(offset, 0, content.length);
+      return clampValue(offset, 0, content.length);
     }
 
-    const wrappedColumn = clamp(Math.round(localX / averageCharWidth), 0, Math.max(columnsPerLine, targetLine.length));
-    return clamp(offset + Math.min(targetLine.length, wrappedColumn), 0, content.length);
+    const wrappedColumn = clampValue(Math.round(localX / averageCharWidth), 0, Math.max(columnsPerLine, targetLine.length));
+    return clampValue(offset + Math.min(targetLine.length, wrappedColumn), 0, content.length);
   }
 
   function eraseTextAtPoint(targetId: string, clientX: number, clientY: number) {
@@ -1225,14 +1552,14 @@ export function PageEditorPage() {
     }
 
     if (targetElement.content.length <= 1) {
-      eraseTextElement(targetId);
+      deleteTextElement(targetId);
       return;
     }
 
     const eraseIndex = getTextEraseIndex(textArea, clientX, clientY);
 
     if (eraseIndex === null) {
-      eraseTextElement(targetId);
+      deleteTextElement(targetId);
       return;
     }
 
@@ -1257,7 +1584,6 @@ export function PageEditorPage() {
         const nextContent = item.content.slice(0, deleteIndex) + item.content.slice(deleteIndex + 1);
 
         if (!nextContent.length) {
-          delete textInputRefs.current[targetId];
           return [];
         }
 
@@ -1274,60 +1600,40 @@ export function PageEditorPage() {
   }
 
   function eraseTextElement(targetId: string) {
-    if (activeTextElementId === targetId) {
-      setIsKeyboardTextMode(false);
-      setActiveTextElementId(null);
-    }
-
-    delete textInputRefs.current[targetId];
-    setTextElements((current) => current.filter((item) => item.id !== targetId));
+    deleteTextElement(targetId);
   }
 
   function handleTextLayerPointerDown(targetId: string, event: ReactPointerEvent<HTMLTextAreaElement>) {
-    setActiveElementId(null);
-
-    if (isEraserActive) {
+    if (shouldRoutePointerToTextEraser()) {
+      selectTextElement(targetId);
       event.preventDefault();
       eraseTextAtPoint(targetId, event.clientX, event.clientY);
       return;
     }
 
-    if (event.pointerType === "pen") {
+    if (shouldBlockKeyboardTextEntry(event.pointerType)) {
       event.preventDefault();
-      setIsKeyboardTextMode(false);
-      textInputRefs.current[targetId]?.setAttribute("inputmode", "none");
-      textInputRefs.current[targetId]?.blur();
+      deactivateKeyboardEditing(targetId, { blur: true, keepSelection: true });
       return;
     }
 
-    const textArea = textInputRefs.current[targetId];
-
-    if (textArea) {
-      focusTextInput(targetId);
-    }
-
-    enableKeyboardTextMode(targetId);
+    beginKeyboardEditing(targetId);
   }
 
   function handleTextLayerPointerMoveCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
-    if (isEraserActive) {
-      event.preventDefault();
-      return;
-    }
-
-    if (event.pointerType === "pen") {
+    if (shouldCaptureTextLayerPointer(event.pointerType)) {
       event.preventDefault();
     }
   }
 
   function handleTextLayerPointerUpCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
-    if (isEraserActive) {
+    if (shouldRoutePointerToTextEraser()) {
       event.preventDefault();
       lastTextEraseSignatureRef.current = null;
       return;
     }
 
-    if (event.pointerType === "pen") {
+    if (shouldBlockKeyboardTextEntry(event.pointerType)) {
       event.preventDefault();
     }
   }
@@ -1337,15 +1643,7 @@ export function PageEditorPage() {
       return;
     }
 
-    if (activeTextElementId === targetId) {
-      setIsKeyboardTextMode(false);
-      setActiveTextElementId(null);
-    }
-
-    textInputRefs.current[targetId]?.setAttribute("inputmode", "none");
-    if (textInputRefs.current[targetId]) {
-      textInputRefs.current[targetId]!.readOnly = true;
-    }
+    deactivateKeyboardEditing(targetId);
   }
 
   function handleTextLayerPointerMove(targetId: string, event: ReactPointerEvent<HTMLTextAreaElement>) {
@@ -1362,10 +1660,11 @@ export function PageEditorPage() {
       return;
     }
 
-    const canDraw = event.pointerType === "pen" || (event.pointerType === "mouse" && event.altKey);
+    const canDraw = isDrawingPointer(event.pointerType, event.altKey);
     const isTextLayerTarget = isTextTarget(event.target);
+    const isOverlay = isOverlayTarget(event.target);
 
-    if (isOverlayTarget(event.target)) {
+    if (isOverlay && !(canDraw && isTextLayerTarget)) {
       return;
     }
 
@@ -1373,29 +1672,31 @@ export function PageEditorPage() {
       return;
     }
 
-    if (event.pointerType === "touch" && isBottomFlipZone(event.clientY)) {
-      setActiveElementId(null);
+    if (shouldHandleBottomFlipTouch(event.pointerType, event.clientY)) {
+      if (hasActiveObjectSelection) {
+        clearActiveObjectSelection();
+      } else {
+        setActiveElementId(null);
+      }
       return;
     }
 
     if (!canDraw) {
+      if (hasActiveObjectSelection) {
+        clearActiveObjectSelection();
+        return;
+      }
+
+      if (!canCreateTextFromSheetPointer(event)) {
+        return;
+      }
+
       setActiveElementId(null);
-      if (!pageId) {
+      const nextTextElement = buildNewTextElementAtPoint(event.clientX, event.clientY);
+
+      if (!nextTextElement) {
         return;
       }
-
-      const frame = getTextElementFrameAtPoint(event.clientX, event.clientY);
-
-      if (!frame) {
-        return;
-      }
-
-      const nextTextElement = {
-        ...buildEditorTextElement(pageId, null, notebook?.bindingType, textColor),
-        id: createId("element"),
-        ...frame,
-        zIndex: zIndexCounterRef.current++,
-      };
 
       flushSync(() => {
         setTextElements((current) => [...current, nextTextElement]);
@@ -1403,9 +1704,7 @@ export function PageEditorPage() {
         setIsKeyboardTextMode(true);
       });
 
-      if (!focusTextInput(nextTextElement.id)) {
-        enableKeyboardTextMode(nextTextElement.id);
-      }
+      beginKeyboardEditing(nextTextElement.id);
       return;
     }
 
@@ -1421,11 +1720,7 @@ export function PageEditorPage() {
     }
     drawingPointerIdRef.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
-    setIsKeyboardTextMode(false);
-    if (activeTextElementId) {
-      textInputRefs.current[activeTextElementId]?.blur();
-    }
-    setActiveTextElementId(null);
+    closeActiveTextEditing();
     setActiveElementId(null);
     drawingCanvasRef.current?.beginStroke(point);
   }
@@ -1562,6 +1857,7 @@ export function PageEditorPage() {
             <div className="editor-sidebar__hint">
               Активный объект поднимается выше остальных. Долгое касание включает перенос, а затем объект можно увести в корзину.
             </div>
+            {assetStorageError ? <div className="inline-notice inline-notice--warning">{assetStorageError}</div> : null}
             <ShapeInsertLibrary
               color={insertColor}
               edgeStyle={insertEdgeStyle}
@@ -1671,6 +1967,27 @@ export function PageEditorPage() {
         </div>
       </div>
 
+      {recoveryNotice ? (
+        <div className="editor-recovery-banner">
+          <div className="editor-recovery-banner__content">
+            <strong>Черновик страницы восстановлен</strong>
+            <span>
+              {recoveryNotice.source === "snapshot"
+                ? `Подняли локальное состояние страницы от ${formatRecoverySavedAt(recoveryNotice.savedAt)}. Сохраните лист вручную, если хотите закрепить изменения.`
+                : "Подняли локальные несохранённые изменения после перезапуска. Сохраните лист вручную или сбросьте черновик к последней сохранённой версии."}
+            </span>
+          </div>
+          <div className="editor-recovery-banner__actions">
+            <Button type="button" variant="ghost" onClick={handleDismissRecoveryNotice}>
+              Оставить
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => void handleResetRecoveredDraft()}>
+              Сбросить черновик
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <div className={`editor-workbench ${activeSection ? "editor-workbench--sidebar" : "editor-workbench--compact"}`}>
         <aside className="editor-rail panel">
           <div className="editor-rail__tools">
@@ -1770,12 +2087,13 @@ export function PageEditorPage() {
                 ) : null}
 
                 {textElements.map((textElement) => {
-                  const isActiveTextElement = isKeyboardTextMode && activeTextElementId === textElement.id;
+                  const isSelectedTextElement = activeTextElementId === textElement.id;
+                  const isTypingTextElement = isKeyboardTextMode && isSelectedTextElement;
 
                   return (
                     <div
                       key={textElement.id}
-                      className={`editor-text-block ${isActiveTextElement ? "editor-text-block--active" : ""}`}
+                      className={`editor-text-block ${isSelectedTextElement ? "editor-text-block--active" : ""}`}
                       style={{
                         top: `${textElement.y}px`,
                         left: `${textElement.x}px`,
@@ -1807,7 +2125,7 @@ export function PageEditorPage() {
                           textInputRefs.current[textElement.id] = node;
                         }}
                         className={`textarea textarea--stage editor-sheet__textarea ${
-                          isActiveTextElement ? "editor-sheet__textarea--typing" : "editor-sheet__textarea--idle"
+                          isTypingTextElement ? "editor-sheet__textarea--typing" : "editor-sheet__textarea--idle"
                         }`}
                         style={{
                           fontSize: `${textElement.style.fontSize}px`,
@@ -1824,15 +2142,14 @@ export function PageEditorPage() {
                         onPointerCancelCapture={handleTextLayerPointerUpCapture}
                         onBlur={() => handleTextLayerBlur(textElement.id)}
                         onFocus={() => {
-                          setActiveTextElementId(textElement.id);
-                          setIsKeyboardTextMode(true);
+                          selectTextElement(textElement.id, { editing: true });
                         }}
-                        readOnly={!isActiveTextElement}
-                        autoFocus={isActiveTextElement}
+                        readOnly={!isTypingTextElement}
+                        autoFocus={isTypingTextElement}
                         spellCheck={false}
                         autoCorrect="off"
                         autoCapitalize="off"
-                        inputMode={isActiveTextElement ? "text" : "none"}
+                        inputMode={isTypingTextElement ? "text" : "none"}
                       />
                     </div>
                   );
@@ -1842,6 +2159,7 @@ export function PageEditorPage() {
                   ref={drawingCanvasRef}
                   className="editor-canvas editor-sheet__canvas"
                   strokes={strokes}
+                  onChange={handleDrawingStrokesChange}
                   toolId={selectedToolId}
                   color={toolColor}
                   strokeWidth={toolWidth}
@@ -1865,6 +2183,15 @@ export function PageEditorPage() {
                   getTrashBounds={getTrashBounds}
                   onDragStateChange={setIsObjectDragging}
                   onTrashHoverChange={setIsTrashHover}
+                  onDraftMutation={() => schedulePageDraftSnapshotFlush()}
+                  registerDraftReader={(reader) => {
+                    mediaDraftReaderRef.current = reader;
+                    return () => {
+                      if (mediaDraftReaderRef.current === reader) {
+                        mediaDraftReaderRef.current = null;
+                      }
+                    };
+                  }}
                 />
 
                 <ShapeNoteLayer
@@ -1877,6 +2204,15 @@ export function PageEditorPage() {
                   getTrashBounds={getTrashBounds}
                   onDragStateChange={setIsObjectDragging}
                   onTrashHoverChange={setIsTrashHover}
+                  onDraftMutation={() => schedulePageDraftSnapshotFlush()}
+                  registerDraftReader={(reader) => {
+                    shapeDraftReaderRef.current = reader;
+                    return () => {
+                      if (shapeDraftReaderRef.current === reader) {
+                        shapeDraftReaderRef.current = null;
+                      }
+                    };
+                  }}
                 />
 
                 <button

@@ -1,5 +1,6 @@
 const STATIC_CACHE = "mybestipadapp-static-v7";
 const RUNTIME_CACHE = "mybestipadapp-runtime-v7";
+const CACHE_VERSION = "v7";
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_PATH = SCOPE_URL.pathname.endsWith("/") ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 const INDEX_HTML_URL = new URL("./index.html", SCOPE_URL).toString();
@@ -7,6 +8,7 @@ const SHELL_URL = new URL("./", SCOPE_URL).toString();
 const MANIFEST_URL = new URL("./manifest.webmanifest", SCOPE_URL).toString();
 const ICON_URL = new URL("./icons/app-icon.svg", SCOPE_URL).toString();
 const OFFLINE_HTML_URL = new URL("./offline.html", SCOPE_URL).toString();
+const READY_MARKER_URL = new URL("./__sw_ready__", SCOPE_URL).toString();
 const STATIC_URL_PATTERNS = [/^assets\//, /^icons\//, /^manifest\.webmanifest$/, /^offline\.html$/, /^index\.html$/];
 const INITIAL_URLS = [SHELL_URL, INDEX_HTML_URL, MANIFEST_URL, ICON_URL, OFFLINE_HTML_URL];
 
@@ -89,6 +91,59 @@ async function warmStaticCache(seedUrls = []) {
       }
     }),
   );
+
+  await cache.put(
+    READY_MARKER_URL,
+    new Response(
+      JSON.stringify({
+        cacheVersion: CACHE_VERSION,
+        checkedAt: new Date().toISOString(),
+        shellUrls: uniqueUrls(urls),
+      }),
+      {
+        headers: {
+          "content-type": "application/json",
+        },
+      },
+    ),
+  );
+}
+
+async function getRuntimeStatusPayload() {
+  const cache = await caches.open(STATIC_CACHE);
+  const [shellResponse, indexResponse, offlineResponse] = await Promise.all([
+    cache.match(SHELL_URL, { ignoreSearch: true }),
+    cache.match(INDEX_HTML_URL, { ignoreSearch: true }),
+    cache.match(OFFLINE_HTML_URL, { ignoreSearch: true }),
+  ]);
+  const readyMarkerResponse = await cache.match(READY_MARKER_URL, { ignoreSearch: true });
+  let checkedAt = null;
+
+  if (readyMarkerResponse) {
+    try {
+      const markerPayload = await readyMarkerResponse.clone().json();
+      checkedAt = typeof markerPayload?.checkedAt === "string" ? markerPayload.checkedAt : null;
+    } catch {
+      checkedAt = null;
+    }
+  }
+
+  return {
+    type: "SW_STATUS",
+    cacheVersion: CACHE_VERSION,
+    hasOfflineShell: Boolean(readyMarkerResponse) && Boolean(shellResponse || indexResponse || offlineResponse),
+    checkedAt,
+  };
+}
+
+async function notifyClientsStatus() {
+  const payload = await getRuntimeStatusPayload();
+  const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  await Promise.all(
+    clients.map(async (client) => {
+      client.postMessage(payload);
+    }),
+  );
 }
 
 async function revalidateIntoCache(request, cacheName) {
@@ -117,6 +172,7 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       await warmStaticCache();
+      await notifyClientsStatus();
       await self.skipWaiting();
     })(),
   );
@@ -134,6 +190,7 @@ self.addEventListener("activate", (event) => {
       );
 
       await self.clients.claim();
+      await notifyClientsStatus();
     })(),
   );
 });
@@ -146,7 +203,22 @@ self.addEventListener("message", (event) => {
 
   if (event.data?.type === "WARM_APP_SHELL" || event.data?.type === "WARM_URLS") {
     const urls = Array.isArray(event.data?.urls) ? event.data.urls : [];
-    event.waitUntil(warmStaticCache(urls));
+    event.waitUntil(
+      (async () => {
+        await warmStaticCache(urls);
+        await notifyClientsStatus();
+      })(),
+    );
+    return;
+  }
+
+  if (event.data?.type === "REQUEST_STATUS") {
+    event.waitUntil(
+      (async () => {
+        const payload = await getRuntimeStatusPayload();
+        event.source?.postMessage(payload);
+      })(),
+    );
   }
 });
 

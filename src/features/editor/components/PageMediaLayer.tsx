@@ -1,4 +1,10 @@
-import { PointerEvent, useEffect, useRef, useState } from "react";
+import { PointerEvent, useRef } from "react";
+import { useEffect } from "react";
+import {
+  clampValue,
+} from "@/features/editor/lib/transformUtils";
+import { useObjectTransformController } from "@/features/editor/lib/useObjectTransformController";
+import { useDraftCollectionState } from "@/features/editor/lib/useDraftCollectionState";
 import { useAssetObjectUrl } from "@/shared/lib/useAssetObjectUrl";
 import { FileAttachmentPageElement, ImagePageElement } from "@/shared/types/models";
 
@@ -17,6 +23,8 @@ interface PageMediaLayerProps {
   getTrashBounds: () => DOMRect | null;
   onDragStateChange: (isDragging: boolean) => void;
   onTrashHoverChange: (isHoveringTrash: boolean) => void;
+  onDraftMutation?: () => void;
+  registerDraftReader?: (reader: () => { images: ImagePageElement[]; files: FileAttachmentPageElement[] }) => () => void;
 }
 
 type MediaDragMode = "move" | "resize";
@@ -32,32 +40,6 @@ interface DragState {
   originY: number;
   originWidth: number;
   originHeight: number;
-}
-
-interface PendingLongPress {
-  id: string;
-  pointerId: number;
-  startX: number;
-  startY: number;
-}
-
-const LONG_PRESS_MS = 260;
-const LONG_PRESS_MOVE_TOLERANCE = 12;
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function isPointInRect(x: number, y: number, rect: DOMRect | null) {
-  if (!rect) {
-    return false;
-  }
-
-  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-}
-
-function hasMovedTooFar(startX: number, startY: number, currentX: number, currentY: number) {
-  return Math.abs(currentX - startX) > LONG_PRESS_MOVE_TOLERANCE || Math.abs(currentY - startY) > LONG_PRESS_MOVE_TOLERANCE;
 }
 
 function getLayerBounds(target: HTMLElement) {
@@ -195,77 +177,33 @@ export function PageMediaLayer({
   getTrashBounds,
   onDragStateChange,
   onTrashHoverChange,
+  onDraftMutation,
+  registerDraftReader,
 }: PageMediaLayerProps) {
-  const [draftImages, setDraftImages] = useState(images);
-  const [draftFiles, setDraftFiles] = useState(files);
   const dragRef = useRef<DragState | null>(null);
-  const draftImagesRef = useRef(images);
-  const draftFilesRef = useRef(files);
-  const longPressTimeoutRef = useRef<number | null>(null);
-  const pendingLongPressRef = useRef<PendingLongPress | null>(null);
+  const {
+    items: draftImages,
+    itemsRef: draftImagesRef,
+    setItems: setDraftImages,
+    updateItems: updateDraftImages,
+  } = useDraftCollectionState(images, Boolean(dragRef.current));
+  const {
+    items: draftFiles,
+    itemsRef: draftFilesRef,
+    setItems: setDraftFiles,
+    updateItems: updateDraftFiles,
+  } = useDraftCollectionState(files, Boolean(dragRef.current));
 
   useEffect(() => {
-    if (!dragRef.current) {
-      setDraftImages(images);
-      draftImagesRef.current = images;
-    }
-  }, [images]);
-
-  useEffect(() => {
-    if (!dragRef.current) {
-      setDraftFiles(files);
-      draftFilesRef.current = files;
-    }
-  }, [files]);
-
-  useEffect(() => {
-    return () => {
-      if (longPressTimeoutRef.current !== null) {
-        window.clearTimeout(longPressTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  function clearLongPress() {
-    if (longPressTimeoutRef.current !== null) {
-      window.clearTimeout(longPressTimeoutRef.current);
-      longPressTimeoutRef.current = null;
+    if (!registerDraftReader) {
+      return;
     }
 
-    pendingLongPressRef.current = null;
-  }
-
-  function updateDraftImages(updater: (current: ImagePageElement[]) => ImagePageElement[]) {
-    setDraftImages((current) => {
-      const nextItems = updater(current);
-      draftImagesRef.current = nextItems;
-      return nextItems;
-    });
-  }
-
-  function updateDraftFiles(updater: (current: FileAttachmentPageElement[]) => FileAttachmentPageElement[]) {
-    setDraftFiles((current) => {
-      const nextItems = updater(current);
-      draftFilesRef.current = nextItems;
-      return nextItems;
-    });
-  }
-
-  function startDrag(item: MediaElement, mode: MediaDragMode, clientX: number, clientY: number) {
-    dragRef.current = {
-      id: item.id,
-      type: item.type,
-      mode,
-      startX: clientX,
-      startY: clientY,
-      originX: item.x,
-      originY: item.y,
-      originWidth: item.width,
-      originHeight: item.height,
-    };
-    onDragStateChange(true);
-    onTrashHoverChange(false);
-  }
+    return registerDraftReader(() => ({
+      images: draftImagesRef.current,
+      files: draftFilesRef.current,
+    }));
+  }, [registerDraftReader]);
 
   function activateItem(item: MediaElement) {
     if (item.type === "image") {
@@ -296,6 +234,7 @@ export function PageMediaLayer({
 
       return nextItems;
     });
+    onDraftMutation?.();
   }
 
   function handleFileCaptionBlur(itemId: string) {
@@ -305,50 +244,50 @@ export function PageMediaLayer({
       onFileCommit(finalItem);
     }
   }
-
-  function handlePressStart(event: PointerEvent<HTMLElement>, item: MediaElement) {
-    event.stopPropagation();
-    const promotedItem = activateItem(item);
-    event.currentTarget.setPointerCapture(event.pointerId);
-
-    if (event.pointerType === "mouse") {
-      startDrag(promotedItem, "move", event.clientX, event.clientY);
-      return;
-    }
-
-    clearLongPress();
-    pendingLongPressRef.current = {
-      id: promotedItem.id,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-    };
-    longPressTimeoutRef.current = window.setTimeout(() => {
-      const pending = pendingLongPressRef.current;
-
-      if (!pending || pending.id !== promotedItem.id || pending.pointerId !== event.pointerId) {
+  const { beginResize, finishInteraction, handleMove, handlePressStart } = useObjectTransformController<
+    MediaElement,
+    DragState
+  >({
+    activateItem,
+    createDragState: (item, mode, clientX, clientY) => ({
+      id: item.id,
+      type: item.type,
+      mode,
+      startX: clientX,
+      startY: clientY,
+      originX: item.x,
+      originY: item.y,
+      originWidth: item.width,
+      originHeight: item.height,
+    }),
+    dragRef,
+    getFinalItem: (itemId, currentDragState) =>
+      currentDragState.type === "image"
+        ? draftImagesRef.current.find((item) => item.id === itemId)
+        : draftFilesRef.current.find((item) => item.id === itemId),
+    getTrashBounds,
+    onCommit: (item, currentDragState) => {
+      if (currentDragState.type === "image" && item.type === "image") {
+        onImageCommit(item);
         return;
       }
 
-      startDrag(promotedItem, "move", pending.startX, pending.startY);
-      longPressTimeoutRef.current = null;
-    }, LONG_PRESS_MS);
-  }
+      if (currentDragState.type === "fileAttachment" && item.type === "fileAttachment") {
+        onFileCommit(item);
+      }
+    },
+    onDelete: (itemId, currentDragState) => {
+      if (currentDragState.type === "image") {
+        onImageDelete(itemId);
+        return;
+      }
 
-  function beginResize(event: PointerEvent<HTMLDivElement>, item: MediaElement) {
-    event.stopPropagation();
-    clearLongPress();
-    const promotedItem = activateItem(item);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    startDrag(promotedItem, "resize", event.clientX, event.clientY);
-  }
-
-  function handleMove(event: PointerEvent<HTMLElement>, item: MediaElement) {
-    const dragState = dragRef.current;
-
-    if (dragState && dragState.id === item.id) {
-      const deltaX = event.clientX - dragState.startX;
-      const deltaY = event.clientY - dragState.startY;
+      onFileDelete(itemId);
+    },
+    onDragStateChange,
+    onMoveWithDrag: (event, item, currentDragState) => {
+      const deltaX = event.clientX - currentDragState.startX;
+      const deltaY = event.clientY - currentDragState.startY;
       const layerBounds = getLayerBounds(event.currentTarget);
 
       if (item.type === "image") {
@@ -358,116 +297,58 @@ export function PageMediaLayer({
               return currentItem;
             }
 
-            if (dragState.mode === "move") {
+            if (currentDragState.mode === "move") {
               const maxX = Math.max(0, (layerBounds?.width ?? Number.POSITIVE_INFINITY) - currentItem.width);
               const maxY = Math.max(0, (layerBounds?.height ?? Number.POSITIVE_INFINITY) - currentItem.height);
               return {
                 ...currentItem,
-                x: clamp(dragState.originX + deltaX, 0, maxX),
-                y: clamp(dragState.originY + deltaY, 0, maxY),
+                x: clampValue(currentDragState.originX + deltaX, 0, maxX),
+                y: clampValue(currentDragState.originY + deltaY, 0, maxY),
               };
             }
 
-            const maxWidth = Math.max(140, (layerBounds?.width ?? dragState.originWidth + deltaX) - currentItem.x);
-            const maxHeight = Math.max(120, (layerBounds?.height ?? dragState.originHeight + deltaY) - currentItem.y);
+            const maxWidth = Math.max(140, (layerBounds?.width ?? currentDragState.originWidth + deltaX) - currentItem.x);
+            const maxHeight = Math.max(120, (layerBounds?.height ?? currentDragState.originHeight + deltaY) - currentItem.y);
             return {
               ...currentItem,
-              width: clamp(dragState.originWidth + deltaX, 140, maxWidth),
-              height: clamp(dragState.originHeight + deltaY, 120, maxHeight),
+              width: clampValue(currentDragState.originWidth + deltaX, 140, maxWidth),
+              height: clampValue(currentDragState.originHeight + deltaY, 120, maxHeight),
             };
           }),
         );
-      } else {
-        updateDraftFiles((current) =>
-          current.map((currentItem) => {
-            if (currentItem.id !== item.id) {
-              return currentItem;
-            }
-
-            if (dragState.mode === "move") {
-              const maxX = Math.max(0, (layerBounds?.width ?? Number.POSITIVE_INFINITY) - currentItem.width);
-              const maxY = Math.max(0, (layerBounds?.height ?? Number.POSITIVE_INFINITY) - currentItem.height);
-              return {
-                ...currentItem,
-                x: clamp(dragState.originX + deltaX, 0, maxX),
-                y: clamp(dragState.originY + deltaY, 0, maxY),
-              };
-            }
-
-            const maxWidth = Math.max(220, (layerBounds?.width ?? dragState.originWidth + deltaX) - currentItem.x);
-            const maxHeight = Math.max(92, (layerBounds?.height ?? dragState.originHeight + deltaY) - currentItem.y);
-            return {
-              ...currentItem,
-              width: clamp(dragState.originWidth + deltaX, 220, maxWidth),
-              height: clamp(dragState.originHeight + deltaY, 92, maxHeight),
-            };
-          }),
-        );
-      }
-
-      onTrashHoverChange(isPointInRect(event.clientX, event.clientY, getTrashBounds()));
-      return;
-    }
-
-    const pending = pendingLongPressRef.current;
-
-    if (!pending || pending.id !== item.id || pending.pointerId !== event.pointerId) {
-      return;
-    }
-
-    if (hasMovedTooFar(pending.startX, pending.startY, event.clientX, event.clientY)) {
-      clearLongPress();
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-    }
-  }
-
-  function finishInteraction(event: PointerEvent<HTMLElement>, itemId: string) {
-    const dragState = dragRef.current;
-
-    if (dragState && dragState.id === itemId) {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-
-      const shouldDelete = isPointInRect(event.clientX, event.clientY, getTrashBounds());
-      const finalImage = draftImagesRef.current.find((item) => item.id === itemId);
-      const finalFile = draftFilesRef.current.find((item) => item.id === itemId);
-
-      dragRef.current = null;
-      onDragStateChange(false);
-      onTrashHoverChange(false);
-
-      if (dragState.type === "image" && finalImage) {
-        if (shouldDelete) {
-          onImageDelete(itemId);
-        } else {
-          onImageCommit(finalImage);
-        }
+        onDraftMutation?.();
         return;
       }
 
-      if (dragState.type === "fileAttachment" && finalFile) {
-        if (shouldDelete) {
-          onFileDelete(itemId);
-        } else {
-          onFileCommit(finalFile);
-        }
-      }
+      updateDraftFiles((current) =>
+        current.map((currentItem) => {
+          if (currentItem.id !== item.id) {
+            return currentItem;
+          }
 
-      return;
-    }
+          if (currentDragState.mode === "move") {
+            const maxX = Math.max(0, (layerBounds?.width ?? Number.POSITIVE_INFINITY) - currentItem.width);
+            const maxY = Math.max(0, (layerBounds?.height ?? Number.POSITIVE_INFINITY) - currentItem.height);
+            return {
+              ...currentItem,
+              x: clampValue(currentDragState.originX + deltaX, 0, maxX),
+              y: clampValue(currentDragState.originY + deltaY, 0, maxY),
+            };
+          }
 
-    const pending = pendingLongPressRef.current;
-
-    if (pending && pending.id === itemId && pending.pointerId === event.pointerId) {
-      clearLongPress();
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-    }
-  }
+          const maxWidth = Math.max(220, (layerBounds?.width ?? currentDragState.originWidth + deltaX) - currentItem.x);
+          const maxHeight = Math.max(92, (layerBounds?.height ?? currentDragState.originHeight + deltaY) - currentItem.y);
+          return {
+            ...currentItem,
+            width: clampValue(currentDragState.originWidth + deltaX, 220, maxWidth),
+            height: clampValue(currentDragState.originHeight + deltaY, 92, maxHeight),
+          };
+        }),
+      );
+      onDraftMutation?.();
+    },
+    onTrashHoverChange,
+  });
 
   return (
     <div className="page-media-layer">
