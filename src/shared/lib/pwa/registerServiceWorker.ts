@@ -1,3 +1,25 @@
+const PWA_UPDATE_EVENT = "mybestipadapp:pwa-update-state";
+const PWA_UPDATE_AVAILABLE_EVENT = "mybestipadapp:pwa-update-available";
+const PWA_CONTROLLER_UPDATED_EVENT = "mybestipadapp:pwa-controller-updated";
+
+function emitPwaUpdateState(status: "checking" | "update-ready" | "activated") {
+  window.dispatchEvent(
+    new CustomEvent(PWA_UPDATE_EVENT, {
+      detail: {
+        status,
+      },
+    }),
+  );
+
+  if (status === "update-ready") {
+    window.dispatchEvent(new Event(PWA_UPDATE_AVAILABLE_EVENT));
+  }
+
+  if (status === "activated") {
+    window.dispatchEvent(new Event(PWA_CONTROLLER_UPDATED_EVENT));
+  }
+}
+
 export function registerServiceWorker() {
   if (!("serviceWorker" in navigator) || !window.isSecureContext) {
     return;
@@ -97,6 +119,7 @@ export function registerServiceWorker() {
         };
 
         registration.addEventListener("updatefound", () => {
+          emitPwaUpdateState("checking");
           const installingWorker = registration.installing;
 
           if (!installingWorker) {
@@ -104,13 +127,24 @@ export function registerServiceWorker() {
           }
 
           installingWorker.addEventListener("statechange", () => {
-            if (installingWorker.state === "installed" && registration.waiting) {
-              registration.waiting.postMessage({ type: "SKIP_WAITING" });
+            if (installingWorker.state === "installed") {
+              if (navigator.serviceWorker.controller) {
+                emitPwaUpdateState("update-ready");
+              }
+
+              if (registration.waiting) {
+                registration.waiting.postMessage({ type: "SKIP_WAITING" });
+              }
             }
           });
         });
 
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          emitPwaUpdateState("activated");
+        });
+
         if (registration.waiting) {
+          emitPwaUpdateState("update-ready");
           registration.waiting.postMessage({ type: "SKIP_WAITING" });
         }
 

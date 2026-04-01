@@ -39,6 +39,8 @@ import { useTextTransformController } from "@/features/editor/lib/useTextTransfo
 import { getNotebook } from "@/features/notebooks/api/notebooks";
 import { NotebookBinding } from "@/features/notebooks/components/NotebookBinding";
 import { createPage, deletePage, getPage, listPages, setPageBookmark, updatePage } from "@/features/pages/api/pages";
+import { getStorageRecoveryMessage } from "@/shared/lib/db/storageErrors";
+import { getFilesUploadPreflight } from "@/shared/lib/db/storagePreflight";
 import { getToolPreset } from "@/shared/config/toolPresets";
 import { buildPaperStyle } from "@/shared/lib/paper";
 import { DrawingPoint, DrawingStroke, FileAttachmentPageElement, ImagePageElement, Notebook, Page, PageLayout, ShapeNoteElement, TextPageElement } from "@/shared/types/models";
@@ -62,6 +64,10 @@ const sidebarSections = [
 ] as const;
 
 type SidebarSectionId = (typeof sidebarSections)[number]["id"];
+type RecoveryNotice = {
+  source: "snapshot" | "recovery";
+  savedAt: string | null;
+};
 
 const strokeStyleLabels: Record<ToolStrokeStyle, string> = {
   solid: "гладкий",
@@ -143,6 +149,29 @@ function buildEditorTextElement(
   };
 }
 
+function formatRecoverySavedAt(value: string | null) {
+  if (!value) {
+    return "после перезапуска";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "после перезапуска";
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function serializeStrokeDraft(strokes: DrawingStroke[]) {
+  return JSON.stringify(strokes);
+}
+
 export function PageEditorPage() {
   const { pageId } = useParams();
   const navigate = useNavigate();
@@ -169,6 +198,8 @@ export function PageEditorPage() {
   const draftSnapshotTimeoutRef = useRef<number | null>(null);
   const draftStrokesRef = useRef<DrawingStroke[]>([]);
   const hasPendingStrokeSaveRef = useRef(false);
+  const mediaDraftReaderRef = useRef<(() => { images: ImagePageElement[]; files: FileAttachmentPageElement[] }) | null>(null);
+  const shapeDraftReaderRef = useRef<(() => ShapeNoteElement[]) | null>(null);
   const lastTextEraseSignatureRef = useRef<string | null>(null);
   const persistedPageSnapshotRef = useRef<string | null>(null);
 
@@ -211,6 +242,8 @@ export function PageEditorPage() {
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [palettePopoverPosition, setPalettePopoverPosition] = useState({ top: 0, left: 0 });
   const [keyboardPaletteBottomOffset, setKeyboardPaletteBottomOffset] = useState(18);
+  const [assetStorageError, setAssetStorageError] = useState<string | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<RecoveryNotice | null>(null);
 
   const toolPreset = getToolPreset(selectedToolId);
   const navigationBlocker = useBlocker(({ historyAction }) => historyAction === "POP");
@@ -256,7 +289,20 @@ export function PageEditorPage() {
     });
   }
 
+  function getCurrentOverlayDraftState() {
+    const mediaDraft = mediaDraftReaderRef.current?.();
+    const shapeDraft = shapeDraftReaderRef.current?.();
+
+    return {
+      images: mediaDraft?.images ?? images,
+      files: mediaDraft?.files ?? files,
+      shapes: shapeDraft ?? shapes,
+    };
+  }
+
   function buildPageRecoveryDraftState(targetPageId: string) {
+    const overlayDrafts = getCurrentOverlayDraftState();
+
     return createPageRecoveryDraft({
       pageId: targetPageId,
       title,
@@ -264,6 +310,9 @@ export function PageEditorPage() {
       paperColor,
       layout,
       textElements,
+      images: overlayDrafts.images,
+      files: overlayDrafts.files,
+      shapes: overlayDrafts.shapes,
     });
   }
 
@@ -286,6 +335,28 @@ export function PageEditorPage() {
     }
 
     writePageDraftSnapshot(targetPageId, buildPageDraftSnapshot(targetPageId));
+  }
+
+  function schedulePageDraftSnapshotFlush(targetPageId = pageId, options?: { syncCanvas?: boolean }) {
+    if (!targetPageId || !hydratedRef.current) {
+      return;
+    }
+
+    if (draftSnapshotTimeoutRef.current !== null) {
+      window.clearTimeout(draftSnapshotTimeoutRef.current);
+    }
+
+    draftSnapshotTimeoutRef.current = window.setTimeout(() => {
+      draftSnapshotTimeoutRef.current = null;
+      const persistedShellSnapshot = serializePageRecoveryDraft(buildPageRecoveryDraftState(targetPageId));
+
+      if (!hasPendingStrokeSaveRef.current && persistedPageSnapshotRef.current === persistedShellSnapshot) {
+        clearPageDraftSnapshot(targetPageId);
+        return;
+      }
+
+      flushPageDraftSnapshot(targetPageId, options);
+    }, PAGE_DRAFT_SYNC_DELAY_MS);
   }
 
   async function loadPage(targetPageId: string) {
@@ -316,6 +387,16 @@ export function PageEditorPage() {
       recoveryDraft?.textElements.map((item) => buildEditorTextElement(targetPageId, item, notebookRecord?.bindingType, textColor)) ??
       baseTextElements;
     const nextStrokes = pageDraftSnapshot?.strokes ?? bundle.strokes;
+    const nextImages = pageDraftSnapshot?.images ?? recoveryDraft?.images ?? bundle.images;
+    const nextFiles = pageDraftSnapshot?.files ?? recoveryDraft?.files ?? bundle.files;
+    const nextShapes = pageDraftSnapshot?.shapes ?? recoveryDraft?.shapes ?? bundle.shapes;
+    const hasRecoveredDrawingDraft =
+      pageDraftSnapshot !== null && serializeStrokeDraft(pageDraftSnapshot.strokes) !== serializeStrokeDraft(bundle.strokes);
+    const nextRecoveryNotice = pageDraftSnapshot
+      ? { source: "snapshot" as const, savedAt: pageDraftSnapshot.savedAt ?? null }
+      : recoveryDraft
+        ? { source: "recovery" as const, savedAt: null }
+        : null;
 
     setPage(pageRecord);
     setNotebook(notebookRecord ?? null);
@@ -327,15 +408,15 @@ export function PageEditorPage() {
     setTextElements(nextTextElements);
     setStrokes(nextStrokes);
     draftStrokesRef.current = nextStrokes;
-    setImages(bundle.images);
-    setFiles(bundle.files);
-    setShapes(bundle.shapes);
+    setImages(nextImages);
+    setFiles(nextFiles);
+    setShapes(nextShapes);
     setActiveElementId(null);
     setActiveTextElementId(null);
     setIsDeletingPage(false);
     setPageDeleteOffset({ x: 0, y: 0 });
     setIsKeyboardTextMode(false);
-    zIndexCounterRef.current = getMaxElementZIndex(bundle.images, bundle.files, bundle.shapes) + 1;
+    zIndexCounterRef.current = getMaxElementZIndex(nextImages, nextFiles, nextShapes) + 1;
 
     const initialTool = notebookRecord?.defaultTool ?? "ballpoint";
     const preset = getToolPreset(initialTool);
@@ -347,7 +428,7 @@ export function PageEditorPage() {
     setToolOpacity(preset.defaultOpacity);
     setInsertPaperStyle(pageRecord.paperType);
     setInsertColor(pageRecord.paperColor);
-    hasPendingStrokeSaveRef.current = Boolean(pageDraftSnapshot?.strokes.length);
+    hasPendingStrokeSaveRef.current = hasRecoveredDrawingDraft;
     persistedPageSnapshotRef.current = serializePageRecoveryDraft(
       createPageRecoveryDraft({
         pageId: targetPageId,
@@ -356,9 +437,13 @@ export function PageEditorPage() {
         paperColor: pageRecord.paperColor,
         layout: pageRecord.layout,
         textElements: baseTextElements,
+        images: bundle.images,
+        files: bundle.files,
+        shapes: bundle.shapes,
       }),
     );
     setSaveState(recoveryDraft || pageDraftSnapshot ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
+    setRecoveryNotice(nextRecoveryNotice);
     setStatus("ready");
     hydratedRef.current = true;
   }
@@ -505,7 +590,7 @@ export function PageEditorPage() {
         saveTimeoutRef.current = null;
       }
     };
-  }, [layout, pageId, paperColor, paperType, textElements, title]);
+  }, [files, images, layout, pageId, paperColor, paperType, shapes, textElements, title]);
 
   useEffect(() => {
     if (!pageId || !hydratedRef.current) {
@@ -520,28 +605,14 @@ export function PageEditorPage() {
     }
 
     writePageRecoveryDraft(pageId, buildPageRecoveryDraftState(pageId));
-  }, [layout, pageId, paperColor, paperType, textElements, title]);
+  }, [files, images, layout, pageId, paperColor, paperType, shapes, textElements, title]);
 
   useEffect(() => {
     if (!pageId || !hydratedRef.current) {
       return;
     }
 
-    if (draftSnapshotTimeoutRef.current !== null) {
-      window.clearTimeout(draftSnapshotTimeoutRef.current);
-    }
-
-    draftSnapshotTimeoutRef.current = window.setTimeout(() => {
-      draftSnapshotTimeoutRef.current = null;
-      const persistedShellSnapshot = serializePageRecoveryDraft(buildPageRecoveryDraftState(pageId));
-
-      if (!hasPendingStrokeSaveRef.current && persistedPageSnapshotRef.current === persistedShellSnapshot) {
-        clearPageDraftSnapshot(pageId);
-        return;
-      }
-
-      flushPageDraftSnapshot(pageId);
-    }, PAGE_DRAFT_SYNC_DELAY_MS);
+    schedulePageDraftSnapshotFlush(pageId);
 
     return () => {
       if (draftSnapshotTimeoutRef.current !== null) {
@@ -549,7 +620,7 @@ export function PageEditorPage() {
         draftSnapshotTimeoutRef.current = null;
       }
     };
-  }, [layout, pageId, paperColor, paperType, strokes, textElements, title]);
+  }, [files, images, layout, pageId, paperColor, paperType, shapes, strokes, textElements, title]);
 
   useEffect(() => {
     if (!pageId) {
@@ -618,10 +689,30 @@ export function PageEditorPage() {
         clearPageDraftSnapshot(pageId);
       }
       setSaveState(hasPendingStrokeSaveRef.current ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
+      setRecoveryNotice(null);
     } catch (error) {
       console.error("Save failed", error);
       setSaveState(SAVE_STATE_ERROR);
     }
+  }
+
+  function handleDismissRecoveryNotice() {
+    setRecoveryNotice(null);
+  }
+
+  async function handleResetRecoveredDraft() {
+    if (!pageId) {
+      return;
+    }
+
+    clearPageRecoveryDraft(pageId);
+    clearPageDraftSnapshot(pageId);
+    draftStrokesRef.current = [];
+    hasPendingStrokeSaveRef.current = false;
+    setRecoveryNotice(null);
+    hydratedRef.current = false;
+    setStatus("loading");
+    await loadPage(pageId);
   }
 
   function handleManualSave() {
@@ -651,8 +742,33 @@ export function PageEditorPage() {
       return;
     }
 
-    for (const file of Array.from(event.target.files)) {
-      await addImageToPage(pageId, file);
+    const files = Array.from(event.target.files);
+    const preflight = getFilesUploadPreflight(files, "изображений");
+
+    if (preflight.level === "blocked") {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !window.confirm(`${preflight.message}\n\nПродолжить добавление изображений?`)
+    ) {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      for (const file of files) {
+        await addImageToPage(pageId, file);
+      }
+      setAssetStorageError(null);
+    } catch (error) {
+      console.error("Image upload failed", error);
+      setAssetStorageError(getStorageRecoveryMessage(error, "изображение"));
     }
 
     event.target.value = "";
@@ -665,8 +781,33 @@ export function PageEditorPage() {
       return;
     }
 
-    for (const file of Array.from(event.target.files)) {
-      await addFileToPage(pageId, file);
+    const files = Array.from(event.target.files);
+    const preflight = getFilesUploadPreflight(files, "файлов страницы");
+
+    if (preflight.level === "blocked") {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !window.confirm(`${preflight.message}\n\nПродолжить добавление файлов?`)
+    ) {
+      setAssetStorageError(preflight.message);
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      for (const file of files) {
+        await addFileToPage(pageId, file);
+      }
+      setAssetStorageError(null);
+    } catch (error) {
+      console.error("File upload failed", error);
+      setAssetStorageError(getStorageRecoveryMessage(error, "файл"));
     }
 
     event.target.value = "";
@@ -1716,6 +1857,7 @@ export function PageEditorPage() {
             <div className="editor-sidebar__hint">
               Активный объект поднимается выше остальных. Долгое касание включает перенос, а затем объект можно увести в корзину.
             </div>
+            {assetStorageError ? <div className="inline-notice inline-notice--warning">{assetStorageError}</div> : null}
             <ShapeInsertLibrary
               color={insertColor}
               edgeStyle={insertEdgeStyle}
@@ -1824,6 +1966,27 @@ export function PageEditorPage() {
           <span className={`editor-sheet__status-pill ${saveStateClassName}`}>{saveState}</span>
         </div>
       </div>
+
+      {recoveryNotice ? (
+        <div className="editor-recovery-banner">
+          <div className="editor-recovery-banner__content">
+            <strong>Черновик страницы восстановлен</strong>
+            <span>
+              {recoveryNotice.source === "snapshot"
+                ? `Подняли локальное состояние страницы от ${formatRecoverySavedAt(recoveryNotice.savedAt)}. Сохраните лист вручную, если хотите закрепить изменения.`
+                : "Подняли локальные несохранённые изменения после перезапуска. Сохраните лист вручную или сбросьте черновик к последней сохранённой версии."}
+            </span>
+          </div>
+          <div className="editor-recovery-banner__actions">
+            <Button type="button" variant="ghost" onClick={handleDismissRecoveryNotice}>
+              Оставить
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => void handleResetRecoveredDraft()}>
+              Сбросить черновик
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className={`editor-workbench ${activeSection ? "editor-workbench--sidebar" : "editor-workbench--compact"}`}>
         <aside className="editor-rail panel">
@@ -2020,6 +2183,15 @@ export function PageEditorPage() {
                   getTrashBounds={getTrashBounds}
                   onDragStateChange={setIsObjectDragging}
                   onTrashHoverChange={setIsTrashHover}
+                  onDraftMutation={() => schedulePageDraftSnapshotFlush()}
+                  registerDraftReader={(reader) => {
+                    mediaDraftReaderRef.current = reader;
+                    return () => {
+                      if (mediaDraftReaderRef.current === reader) {
+                        mediaDraftReaderRef.current = null;
+                      }
+                    };
+                  }}
                 />
 
                 <ShapeNoteLayer
@@ -2032,6 +2204,15 @@ export function PageEditorPage() {
                   getTrashBounds={getTrashBounds}
                   onDragStateChange={setIsObjectDragging}
                   onTrashHoverChange={setIsTrashHover}
+                  onDraftMutation={() => schedulePageDraftSnapshotFlush()}
+                  registerDraftReader={(reader) => {
+                    shapeDraftReaderRef.current = reader;
+                    return () => {
+                      if (shapeDraftReaderRef.current === reader) {
+                        shapeDraftReaderRef.current = null;
+                      }
+                    };
+                  }}
                 />
 
                 <button

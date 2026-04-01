@@ -1,4 +1,4 @@
-# MyBestIpadApp Roadmap
+﻿# MyBestIpadApp Roadmap
 
 ## Purpose
 
@@ -72,6 +72,18 @@ In progress now:
 In progress now:
 - первый шаг взят с самого безопасного слоя: storage/quota diagnostics в `PWA статус`, чтобы local-first поведение стало наблюдаемым до более рискованных изменений service worker и offline install path.
 - следующий подшаг на том же слое: явный recovery path прямо в `PWA статус`, чтобы при warning/danger состоянии пользователь сразу видел, что делать с локальным хранилищем и крупными вложениями.
+- текущий практический шаг на том же слое: quota-safe upload flow для изображений, файлов, обложек и фона, чтобы IndexedDB/storage ошибки не терялись молча в editor/notebook/background сценариях.
+- следующий practical step на том же reliability-слое: predictable reopen/reload path для страницы, чтобы после локального recovery было явно видно, что восстановилось, и можно было безопасно сохранить или сбросить черновик.
+- внутри predictable reopen/reload path отдельный cleanup идёт на drawing dirty-state, чтобы даже очищенный до пустого canvas не терял recovery semantics до ручного сохранения.
+- следующий безопасный reliability-шаг уже начат через persisted draft fallback: recovery слоям страницы добавляется `localStorage`-уровень поверх быстрого `sessionStorage`, чтобы reopen/PWA relaunch меньше зависел от одного session lifecycle.
+- тот же reliability-слой теперь дотягивается и до overlay draft-domain: `images/files/shapes` начинают попадать в page-level recovery snapshot, чтобы незавершённые transform-сценарии не терялись так легко на `pagehide/reopen`.
+- следующий incremental cleanup в том же overlay reliability-слое: локальные draft-mutations этих объектов сами обновляют debounced recovery snapshot, чтобы overlay recovery меньше зависел только от pagehide и parent commit timing.
+- следующий low-risk слой install/offline reliability теперь переводится из пассивной диагностики в понятный readiness UX: `PWA статус` должен не только показывать service worker/storage signals, но и объяснять, готово ли приложение к офлайн-запуску и какое следующее действие нужно пользователю.
+- внутри page reliability лёгкий `recoveryDraft` теперь тоже дотягивается до `images/files/shapes`, чтобы overlay inline-edit был менее хрупким и не держался только на более тяжёлом snapshot/pagehide пути.
+- следующий слой app-level offline reliability уже начинает опираться на явный readiness contract между приложением и Service Worker, чтобы install/reopen path меньше зависел от эвристики кэша и точнее показывал реальную готовность shell к офлайн-запуску.
+- поверх этого readiness contract install/offline UX теперь развивается в пошаговый flow, чтобы пользователь видел не только итоговый статус, но и текущий прогресс: HTTPS/SW, прогрев shell, запуск как иконка iPad.
+- на том же reliability-слое теперь появляется и ручной backup fallback: экспорт/импорт локальной базы, чтобы recovery path не зависел только от service worker и текущего браузерного storage state.
+- следующий cleanup этого же пути уже закрыт: backup import должен полностью сбрасывать stale recovery drafts и перезагружать приложение в чистое восстановленное состояние, а не оставлять старый screen-state поверх новой базы.
 
 ### v1.3 — Notebook Power Features
 - добавить шаблоны блокнотов и стартовых страниц;
@@ -282,3 +294,19 @@ Roadmap можно считать успешным, если проект при
 - новые функции добавляются без архитектурного хаоса;
 - визуально это действительно premium notebook experience, а не просто PWA с красивым фоном.
 
+
+
+- current v1.2 follow-up: app-shell should keep a lightweight offline coach banner until the user has a clearly warmed and install-ready launch path, not just a hidden diagnostics panel.
+- current v1.2 follow-up: cache/update discipline should acknowledge the new shell immediately after `activate`, so reopen/update feedback does not lag behind the actual service worker state.
+
+- current v1.2 step: after a new service worker version takes over, the app should ask for an explicit reload instead of silently continuing on stale in-memory UI state.
+- current v1.2 follow-up: service worker updates should surface an explicit reload path in app shell, so update/reopen is visible and not hidden behind silent SKIP_WAITING behavior.
+- current v1.2 follow-up: heavy backup export/import should preflight size and quota risk before Safari starts a large JSON/base64 roundtrip, so recovery paths fail early and clearly instead of dying mid-operation.
+- current v1.2 follow-up: user-facing storage errors should stay readable and scenario-specific for backup, background, cover, image and file flows, especially under iPad Safari quota pressure.
+- current v1.2 step: all major local upload entry points should perform quota-aware preflight before starting image/file/background/cover writes, not only after IndexedDB throws.
+- current v1.2 follow-up: after upload preflight is in place, the next storage-quality pass should focus on stronger recovery for the heaviest attachment scenarios and more explicit cleanup guidance under Safari pressure.
+- current v1.2 step: storage diagnostics should point to actual cleanup targets (heavy notebooks/background assets), not only generic quota percentages.
+- current v1.2 follow-up: storage diagnostics should also offer direct cleanup/navigation actions, so users can move from quota warning to a concrete notebook/background cleanup path in one tap.
+- current v1.2 step: integrity repair should safely clean orphan blobs and broken singleton links without silently deleting user content that still needs manual review.
+- current v1.2 follow-up: keep growing a small automated safety net around storage/offline helpers while the project is still local-first and schema-light.
+- current v1.2 step: offline readiness should be computed by one shared gate across shell/status UI, so the app stops giving mixed signals about whether offline launch is actually safe.

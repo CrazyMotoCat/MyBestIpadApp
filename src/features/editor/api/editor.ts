@@ -1,6 +1,7 @@
 import { getPage } from "@/features/pages/api/pages";
 import { getDatabase } from "@/shared/lib/db/database";
-import { saveFileAsset, getAssetById, getAssetObjectUrl } from "@/shared/lib/db/assets";
+import { deleteAssetById, saveFileAsset, getAssetById, getAssetObjectUrl } from "@/shared/lib/db/assets";
+import { toStorageWriteError } from "@/shared/lib/db/storageErrors";
 import { createId } from "@/shared/lib/utils/id";
 import {
   DrawingPageElement,
@@ -175,7 +176,13 @@ export async function addImageToPage(pageId: string, file: File) {
     caption: "",
   };
 
-  await db.put("pageElements", element);
+  try {
+    await db.put("pageElements", element);
+  } catch (error) {
+    await deleteAssetById(asset.id);
+    throw toStorageWriteError(error, "добавить изображение на страницу");
+  }
+
   return element;
 }
 
@@ -200,7 +207,13 @@ export async function addFileToPage(pageId: string, file: File) {
     note: "",
   };
 
-  await db.put("pageElements", element);
+  try {
+    await db.put("pageElements", element);
+  } catch (error) {
+    await deleteAssetById(asset.id);
+    throw toStorageWriteError(error, "добавить файл на страницу");
+  }
+
   return element;
 }
 

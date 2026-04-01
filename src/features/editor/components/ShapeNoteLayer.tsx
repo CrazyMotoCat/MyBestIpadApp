@@ -1,4 +1,4 @@
-import { PointerEvent, useRef } from "react";
+import { PointerEvent, useEffect, useRef } from "react";
 import {
   clampValue,
 } from "@/features/editor/lib/transformUtils";
@@ -17,6 +17,8 @@ interface ShapeNoteLayerProps {
   getTrashBounds: () => DOMRect | null;
   onDragStateChange: (isDragging: boolean) => void;
   onTrashHoverChange: (isHoveringTrash: boolean) => void;
+  onDraftMutation?: () => void;
+  registerDraftReader?: (reader: () => ShapeNoteElement[]) => () => void;
 }
 
 type DragMode = "move" | "resize";
@@ -46,10 +48,20 @@ export function ShapeNoteLayer({
   getTrashBounds,
   onDragStateChange,
   onTrashHoverChange,
+  onDraftMutation,
+  registerDraftReader,
 }: ShapeNoteLayerProps) {
   const dragRef = useRef<DragState | null>(null);
   const { items: draftItems, itemsRef: draftItemsRef, setItems: setDraftItems, updateItems: updateDraftItems } =
     useDraftCollectionState(items, Boolean(dragRef.current));
+
+  useEffect(() => {
+    if (!registerDraftReader) {
+      return;
+    }
+
+    return registerDraftReader(() => draftItemsRef.current);
+  }, [registerDraftReader]);
 
   function activateItem(item: ShapeNoteElement) {
     const promotedItem = onInteractStart(item);
@@ -71,6 +83,7 @@ export function ShapeNoteLayer({
 
       return nextItems;
     });
+    onDraftMutation?.();
   }
 
   function handleTextBlur(itemId: string) {
@@ -131,6 +144,7 @@ export function ShapeNoteLayer({
           };
         }),
       );
+      onDraftMutation?.();
     },
     onTrashHoverChange,
   });

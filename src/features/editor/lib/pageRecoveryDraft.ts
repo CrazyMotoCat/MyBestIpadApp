@@ -1,8 +1,17 @@
-import { DrawingStroke, PageLayout, TextPageElement } from "@/shared/types/models";
+﻿import {
+  DrawingStroke,
+  FileAttachmentPageElement,
+  ImagePageElement,
+  PageLayout,
+  ShapeNoteElement,
+  TextPageElement,
+} from "@/shared/types/models";
 import { PaperPresetId } from "@/shared/types/presets";
 
 const PAGE_RECOVERY_DRAFT_PREFIX = "editor-page-draft:";
 const PAGE_DRAFT_STORAGE_PREFIX = "mybestipadapp:page-draft:";
+const PAGE_RECOVERY_PERSISTED_PREFIX = "mybestipadapp:persisted-page-recovery:";
+const PAGE_DRAFT_PERSISTED_PREFIX = "mybestipadapp:persisted-page-draft:";
 
 export interface PageRecoveryDraft {
   pageId: string;
@@ -11,6 +20,9 @@ export interface PageRecoveryDraft {
   paperColor: string;
   layout: PageLayout;
   textElements: TextPageElement[];
+  images: ImagePageElement[];
+  files: FileAttachmentPageElement[];
+  shapes: ShapeNoteElement[];
 }
 
 export interface PageDraftSnapshot extends PageRecoveryDraft {
@@ -25,6 +37,9 @@ interface PageRecoveryDraftPayload {
   paperColor: string;
   layout: PageLayout;
   textElements: TextPageElement[];
+  images: ImagePageElement[];
+  files: FileAttachmentPageElement[];
+  shapes: ShapeNoteElement[];
 }
 
 function getPageRecoveryDraftKey(pageId: string) {
@@ -33,6 +48,78 @@ function getPageRecoveryDraftKey(pageId: string) {
 
 function getPageDraftStorageKey(pageId: string) {
   return `${PAGE_DRAFT_STORAGE_PREFIX}${pageId}`;
+}
+
+function getPersistedPageRecoveryDraftKey(pageId: string) {
+  return `${PAGE_RECOVERY_PERSISTED_PREFIX}${pageId}`;
+}
+
+function getPersistedPageDraftStorageKey(pageId: string) {
+  return `${PAGE_DRAFT_PERSISTED_PREFIX}${pageId}`;
+}
+
+function readJsonFromStorage<T>(storage: Storage | undefined, key: string) {
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    const raw = storage.getItem(key);
+
+    if (!raw) {
+      return null;
+    }
+
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonToStorage(storage: Storage | undefined, key: string, value: unknown) {
+  if (!storage) {
+    return;
+  }
+
+  try {
+    storage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage availability/quota issues and keep editor usable.
+  }
+}
+
+function removeFromStorage(storage: Storage | undefined, key: string) {
+  if (!storage) {
+    return;
+  }
+
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Ignore storage availability issues and keep editor usable.
+  }
+}
+
+function clearKeysByPrefixes(storage: Storage | undefined, prefixes: string[]) {
+  if (!storage) {
+    return;
+  }
+
+  try {
+    const keysToDelete: string[] = [];
+
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+
+      if (key && prefixes.some((prefix) => key.startsWith(prefix))) {
+        keysToDelete.push(key);
+      }
+    }
+
+    keysToDelete.forEach((key) => storage.removeItem(key));
+  } catch {
+    // Ignore storage availability issues and keep editor usable.
+  }
 }
 
 export function serializePageRecoveryDraft(draft: PageRecoveryDraft) {
@@ -47,6 +134,9 @@ export function createPageRecoveryDraft(payload: PageRecoveryDraftPayload): Page
     paperColor: payload.paperColor,
     layout: payload.layout,
     textElements: payload.textElements,
+    images: payload.images,
+    files: payload.files,
+    shapes: payload.shapes,
   };
 }
 
@@ -59,63 +149,50 @@ export function createPageDraftSnapshot(payload: PageRecoveryDraftPayload & { st
 }
 
 export function readPageRecoveryDraft(pageId: string) {
-  try {
-    const raw = window.sessionStorage.getItem(getPageRecoveryDraftKey(pageId));
+  const sessionDraft = readJsonFromStorage<PageRecoveryDraft>(window.sessionStorage, getPageRecoveryDraftKey(pageId));
 
-    if (!raw) {
-      return null;
-    }
-
-    const parsed = JSON.parse(raw) as PageRecoveryDraft;
-    return parsed.pageId === pageId ? parsed : null;
-  } catch {
-    return null;
+  if (sessionDraft?.pageId === pageId) {
+    return sessionDraft;
   }
+
+  const persistedDraft = readJsonFromStorage<PageRecoveryDraft>(
+    window.localStorage,
+    getPersistedPageRecoveryDraftKey(pageId),
+  );
+  return persistedDraft?.pageId === pageId ? persistedDraft : null;
 }
 
 export function clearPageRecoveryDraft(pageId: string) {
-  try {
-    window.sessionStorage.removeItem(getPageRecoveryDraftKey(pageId));
-  } catch {
-    // Ignore sessionStorage availability issues and keep editor usable.
-  }
+  removeFromStorage(window.sessionStorage, getPageRecoveryDraftKey(pageId));
+  removeFromStorage(window.localStorage, getPersistedPageRecoveryDraftKey(pageId));
 }
 
 export function writePageRecoveryDraft(pageId: string, draft: PageRecoveryDraft) {
-  try {
-    window.sessionStorage.setItem(getPageRecoveryDraftKey(pageId), serializePageRecoveryDraft(draft));
-  } catch {
-    // Ignore sessionStorage availability issues and keep editor usable.
-  }
+  writeJsonToStorage(window.sessionStorage, getPageRecoveryDraftKey(pageId), draft);
+  writeJsonToStorage(window.localStorage, getPersistedPageRecoveryDraftKey(pageId), draft);
 }
 
 export function readPageDraftSnapshot(pageId: string) {
-  try {
-    const raw = window.sessionStorage.getItem(getPageDraftStorageKey(pageId));
+  const sessionSnapshot = readJsonFromStorage<PageDraftSnapshot>(window.sessionStorage, getPageDraftStorageKey(pageId));
 
-    if (!raw) {
-      return null;
-    }
-
-    return JSON.parse(raw) as PageDraftSnapshot;
-  } catch (error) {
-    console.warn("Failed to read page draft snapshot", error);
-    return null;
+  if (sessionSnapshot) {
+    return sessionSnapshot;
   }
+
+  return readJsonFromStorage<PageDraftSnapshot>(window.localStorage, getPersistedPageDraftStorageKey(pageId));
 }
 
 export function clearPageDraftSnapshot(pageId: string) {
-  try {
-    window.sessionStorage.removeItem(getPageDraftStorageKey(pageId));
-  } catch (error) {
-    console.warn("Failed to clear page draft snapshot", error);
-  }
+  removeFromStorage(window.sessionStorage, getPageDraftStorageKey(pageId));
+  removeFromStorage(window.localStorage, getPersistedPageDraftStorageKey(pageId));
 }
 
 export function writePageDraftSnapshot(pageId: string, snapshot: PageDraftSnapshot) {
-  try {
-    window.sessionStorage.setItem(getPageDraftStorageKey(pageId), JSON.stringify(snapshot));
-  } catch (error) {
-    console.warn("Failed to write page draft snapshot", error);
-  }
+  writeJsonToStorage(window.sessionStorage, getPageDraftStorageKey(pageId), snapshot);
+  writeJsonToStorage(window.localStorage, getPersistedPageDraftStorageKey(pageId), snapshot);
+}
+
+export function clearAllPageRecoveryDrafts() {
+  clearKeysByPrefixes(window.sessionStorage, [PAGE_RECOVERY_DRAFT_PREFIX, PAGE_DRAFT_STORAGE_PREFIX]);
+  clearKeysByPrefixes(window.localStorage, [PAGE_RECOVERY_PERSISTED_PREFIX, PAGE_DRAFT_PERSISTED_PREFIX]);
 }

@@ -1,4 +1,5 @@
 import { PointerEvent, useRef } from "react";
+import { useEffect } from "react";
 import {
   clampValue,
 } from "@/features/editor/lib/transformUtils";
@@ -22,6 +23,8 @@ interface PageMediaLayerProps {
   getTrashBounds: () => DOMRect | null;
   onDragStateChange: (isDragging: boolean) => void;
   onTrashHoverChange: (isHoveringTrash: boolean) => void;
+  onDraftMutation?: () => void;
+  registerDraftReader?: (reader: () => { images: ImagePageElement[]; files: FileAttachmentPageElement[] }) => () => void;
 }
 
 type MediaDragMode = "move" | "resize";
@@ -174,6 +177,8 @@ export function PageMediaLayer({
   getTrashBounds,
   onDragStateChange,
   onTrashHoverChange,
+  onDraftMutation,
+  registerDraftReader,
 }: PageMediaLayerProps) {
   const dragRef = useRef<DragState | null>(null);
   const {
@@ -188,6 +193,17 @@ export function PageMediaLayer({
     setItems: setDraftFiles,
     updateItems: updateDraftFiles,
   } = useDraftCollectionState(files, Boolean(dragRef.current));
+
+  useEffect(() => {
+    if (!registerDraftReader) {
+      return;
+    }
+
+    return registerDraftReader(() => ({
+      images: draftImagesRef.current,
+      files: draftFilesRef.current,
+    }));
+  }, [registerDraftReader]);
 
   function activateItem(item: MediaElement) {
     if (item.type === "image") {
@@ -218,6 +234,7 @@ export function PageMediaLayer({
 
       return nextItems;
     });
+    onDraftMutation?.();
   }
 
   function handleFileCaptionBlur(itemId: string) {
@@ -299,6 +316,7 @@ export function PageMediaLayer({
             };
           }),
         );
+        onDraftMutation?.();
         return;
       }
 
@@ -327,6 +345,7 @@ export function PageMediaLayer({
           };
         }),
       );
+      onDraftMutation?.();
     },
     onTrashHoverChange,
   });
