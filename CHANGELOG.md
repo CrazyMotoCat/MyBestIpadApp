@@ -27,6 +27,7 @@
 - issue templates и PR template.
 
 ### Changed
+- начат `v1.3 — Notebook Power Features`: на главном экране, экране блокнота и в панели закладок редактора появился локальный поиск, а список страниц блока получил быстрый `page strip` с мини-метаданными для перехода между недавними листами;
 - проект ушёл от уровня «стартовый шаблон» к более цельной локальной продуктовой базе;
 - данные, пресеты и конфигурации вынесены из UI в отдельные типы, конфиги и shared-слой;
 - архитектура сохранена модульной: `app`, `features`, `shared/config`, `shared/lib`, `shared/types`, `shared/ui`.
@@ -99,3 +100,10 @@
 - custom cover/background replacement now cleans up stale previous assets instead of leaving silent local blobs behind.
 - a lightweight Vitest smoke layer now covers storage preflight and storage integrity helpers, so `v1.2` has its first direct automated checks beyond build/typecheck.
 - offline launch state is now derived from a shared readiness gate used by both the shell coach and PWA status panel, so the app gives one consistent answer to “offline is ready or not”.
+- service worker updates now wait for explicit user action instead of silently forcing `skipWaiting`, so Sprint 1 update flow is `apply update -> takeover -> reload`.
+- app shell and `PWA статус` now read the same worker-confirmed runtime status, so offline readiness and update state no longer diverge between two UI surfaces.
+- CI now runs `npm run test` in addition to typecheck and build, and Sprint 1 has a dedicated smoke checklist in `SPRINT_1_SMOKE_PACK.md`.
+- `PWA статус` now includes storage health diagnostics for `IndexedDB` / `localStorage` availability and the last known local write result, so QA and support can inspect persistence state without opening DevTools.
+- pending page recovery drafts are now observable inside `PWA статус`, including storage source and draft kind, and can be cleared manually when reopen/recovery state needs a clean reset.
+- storage-heavy local operations now leave a lightweight write-status trail for support/debug scenarios, so storage failures are easier to localize after asset writes, background updates and integrity repair actions.
+- стартовал `v1.3 — Notebook Power Features`: добавлены локальный поиск по блокнотам и страницам, фильтр bookmarked pages, поиск по закладкам в редакторе и быстрый jump-strip внутри блокнота.
