@@ -228,6 +228,7 @@ export function PageEditorPage() {
   const [insertColor, setInsertColor] = useState("#fff1a6");
   const [insertPaperStyle, setInsertPaperStyle] = useState<PaperPresetId>("plain");
   const [insertEdgeStyle, setInsertEdgeStyle] = useState<ShapeNoteElement["edgeStyle"]>("straight");
+  const [bookmarkSearchQuery, setBookmarkSearchQuery] = useState("");
   const [flipDirection, setFlipDirection] = useState<"" | "left" | "right">("");
   const [swipePreviewDirection, setSwipePreviewDirection] = useState<"" | "left" | "right">("");
   const [swipePreviewProgress, setSwipePreviewProgress] = useState(0);
@@ -1933,7 +1934,21 @@ export function PageEditorPage() {
                 <p>Отмеченные страницы под рукой, чтобы быстро перескакивать между важными местами.</p>
               </div>
             </div>
-            <BookmarksPanel notebookId={notebook.id} currentPageId={currentPageId} pages={pages} />
+            <div className="search-toolbar search-toolbar--tight">
+              <input
+                className="input search-toolbar__input"
+                value={bookmarkSearchQuery}
+                onChange={(event) => setBookmarkSearchQuery(event.target.value)}
+                placeholder="Поиск по закладкам"
+              />
+              <div className="search-toolbar__meta">{pages.filter((page) => page.isBookmarked).length} закладок</div>
+            </div>
+            <BookmarksPanel
+              notebookId={notebook.id}
+              currentPageId={currentPageId}
+              pages={pages}
+              searchQuery={bookmarkSearchQuery}
+            />
           </div>
         ) : null;
       default:

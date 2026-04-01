@@ -1,14 +1,14 @@
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { getTextElement } from "@/features/editor/api/editor";
 import { FileAttachmentList } from "@/features/editor/components/FileAttachmentList";
-import { listNotebookAttachments, attachFilesToNotebook, getNotebook, updateNotebook } from "@/features/notebooks/api/notebooks";
+import { attachFilesToNotebook, getNotebook, listNotebookAttachments, updateNotebook } from "@/features/notebooks/api/notebooks";
 import { CreateNotebookModal } from "@/features/notebooks/components/CreateNotebookModal";
 import { NotebookBinding } from "@/features/notebooks/components/NotebookBinding";
 import { createPage, listPages, updatePage } from "@/features/pages/api/pages";
+import { notebookTypePresets } from "@/shared/config/notebookPresets";
 import { getPaperPreset } from "@/shared/config/paperPresets";
 import { getToolPreset } from "@/shared/config/toolPresets";
-import { notebookTypePresets } from "@/shared/config/notebookPresets";
 import { getStorageRecoveryMessage } from "@/shared/lib/db/storageErrors";
 import { getFilesUploadPreflight } from "@/shared/lib/db/storagePreflight";
 import { buildPaperStyle } from "@/shared/lib/paper";
@@ -21,11 +21,22 @@ interface PageCardData extends Page {
   preview: string;
 }
 
+const notebookDateFormatter = new Intl.DateTimeFormat("ru-RU", {
+  day: "2-digit",
+  month: "short",
+});
+
+function formatPageMeta(dateIso: string) {
+  return `Обновлена ${notebookDateFormatter.format(new Date(dateIso))}`;
+}
+
 export function NotebookPage() {
   const { notebookId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
   const [title, setTitle] = useState("");
+  const [pageSearchQuery, setPageSearchQuery] = useState("");
+  const [showOnlyBookmarks, setShowOnlyBookmarks] = useState(false);
   const [notebook, setNotebook] = useState<Notebook | null>(null);
   const [pages, setPages] = useState<PageCardData[]>([]);
   const [attachments, setAttachments] = useState<NotebookAttachment[]>([]);
@@ -41,6 +52,26 @@ export function NotebookPage() {
       : null;
 
   const coverImageUrl = useAssetObjectUrl(notebook?.coverImageAssetId);
+  const highlightedPageId = sourcePageId ?? pages[0]?.id ?? null;
+  const filteredPages = useMemo(() => {
+    const normalizedQuery = pageSearchQuery.trim().toLowerCase();
+
+    return pages.filter((page) => {
+      if (showOnlyBookmarks && !page.isBookmarked) {
+        return false;
+      }
+
+      if (!normalizedQuery) {
+        return true;
+      }
+
+      return page.title.toLowerCase().includes(normalizedQuery) || page.preview.toLowerCase().includes(normalizedQuery);
+    });
+  }, [pageSearchQuery, pages, showOnlyBookmarks]);
+  const quickPages = useMemo(
+    () => [...pages].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.pageOrder - b.pageOrder).slice(0, 8),
+    [pages],
+  );
 
   async function load() {
     if (!notebookId) {
@@ -104,11 +135,7 @@ export function NotebookPage() {
       return;
     }
 
-    if (
-      preflight.level === "warning" &&
-      preflight.message &&
-      !window.confirm(`${preflight.message}\n\nПродолжить добавление файлов в блокнот?`)
-    ) {
+    if (preflight.level === "warning" && preflight.message && !window.confirm(`${preflight.message}\n\nПродолжить добавление файлов в блокнот?`)) {
       setAttachmentError(preflight.message);
       event.target.value = "";
       return;
@@ -201,10 +228,76 @@ export function NotebookPage() {
             </div>
           </div>
 
-          <div className="grid grid--pages">
-            {pages.length === 0 ? <div className="empty-inline">Страниц пока нет. Создайте первую.</div> : null}
+          <div className="screen-caption">
+            <span className="tag">Всего страниц: {pages.length}</span>
+            <span className="tag">Закладок: {pages.filter((page) => page.isBookmarked).length}</span>
+          </div>
 
-            {pages.map((page) => (
+          <div className="page-strip">
+            {quickPages.map((page) => (
+              <Link
+                key={page.id}
+                to={`/pages/${page.id}`}
+                className={`page-strip-card ${sourcePageId === page.id ? "page-strip-card--active" : ""}`}
+              >
+                <div className="page-strip-card__sheet" style={buildPaperStyle(page.paperType, page.paperColor)} />
+                <div className="stack">
+                  <strong>
+                    {page.isBookmarked ? "★ " : ""}
+                    {page.title}
+                  </strong>
+                  <span className="muted">Лист {page.pageOrder}</span>
+                  <span className="muted">{formatPageMeta(page.updatedAt)}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+
+          <div className="search-toolbar search-toolbar--tight">
+            <input
+              className="input search-toolbar__input"
+              value={pageSearchQuery}
+              onChange={(event) => setPageSearchQuery(event.target.value)}
+              placeholder="Поиск страницы по названию или фрагменту текста"
+            />
+            <button
+              type="button"
+              className={`toggle-chip ${showOnlyBookmarks ? "toggle-chip--active" : ""}`}
+              onClick={() => setShowOnlyBookmarks((current) => !current)}
+            >
+              {showOnlyBookmarks ? "Только закладки" : "Все страницы"}
+            </button>
+            <div className="search-toolbar__meta">
+              {filteredPages.length} из {pages.length}
+            </div>
+          </div>
+
+          {filteredPages.length > 0 ? (
+            <div className="page-quick-strip" aria-label="Быстрый переход по страницам">
+              {filteredPages.slice(0, 10).map((page) => (
+                <Link
+                  key={`${page.id}-quick`}
+                  to={`/pages/${page.id}`}
+                  className={`page-quick-chip ${page.id === highlightedPageId ? "page-quick-chip--active" : ""}`}
+                >
+                  <span className="page-quick-chip__index">Лист {page.pageOrder}</span>
+                  <span className="page-quick-chip__title">{page.title}</span>
+                  {page.isBookmarked ? <span className="page-quick-chip__mark">★</span> : null}
+                </Link>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="grid grid--pages">
+            {filteredPages.length === 0 ? (
+              <div className="empty-inline">
+                {pageSearchQuery.trim() || showOnlyBookmarks
+                  ? "Под такой фильтр страницы не нашлись."
+                  : "Страниц пока нет. Создайте первую."}
+              </div>
+            ) : null}
+
+            {filteredPages.map((page) => (
               <Link key={page.id} to={`/pages/${page.id}`} className="page-link-card">
                 <div className="page-card__preview" style={buildPaperStyle(page.paperType, page.paperColor)} />
                 <div className="stack">
@@ -213,6 +306,10 @@ export function NotebookPage() {
                     {page.title}
                   </strong>
                   <span className="muted">{page.preview}</span>
+                  <div className="page-card__meta">
+                    <span className="tag">Лист {page.pageOrder}</span>
+                    <span className="tag">{formatPageMeta(page.updatedAt)}</span>
+                  </div>
                 </div>
               </Link>
             ))}

@@ -5,13 +5,25 @@ interface BookmarksPanelProps {
   notebookId: string;
   currentPageId: string;
   pages: Page[];
+  searchQuery?: string;
 }
 
-export function BookmarksPanel({ notebookId, currentPageId, pages }: BookmarksPanelProps) {
-  const bookmarked = pages.filter((page) => page.isBookmarked);
+export function BookmarksPanel({ notebookId, currentPageId, pages, searchQuery = "" }: BookmarksPanelProps) {
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const bookmarked = pages.filter((page) => {
+    if (!page.isBookmarked) {
+      return false;
+    }
+
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    return page.title.toLowerCase().includes(normalizedQuery);
+  });
 
   if (bookmarked.length === 0) {
-    return <div className="empty-inline">Закладок пока нет.</div>;
+    return <div className="empty-inline">{normalizedQuery ? "Поиск по закладкам ничего не нашёл." : "Закладок пока нет."}</div>;
   }
 
   return (
@@ -30,4 +42,3 @@ export function BookmarksPanel({ notebookId, currentPageId, pages }: BookmarksPa
     </div>
   );
 }
-
