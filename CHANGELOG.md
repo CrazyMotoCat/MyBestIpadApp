@@ -56,6 +56,14 @@
 - для page shell и text blocks добавлен лёгкий session-level recovery draft: при незавершённых изменениях редактор может восстановить заголовок, бумагу, layout и текстовые блоки после перезагрузки вкладки, не залезая в более тяжёлый offline/quota слой `v1.2`.
 
 - РµС‰С‘ РѕРґРёРЅ recovery-слой РґРѕР±Р°РІР»РµРЅ РґР»СЏ drawing draft: РєРѕСЂРѕС‚РєРёРµ РІРЅСѓС‚СЂРµРЅРЅРёРµ С€С‚СЂРёС…Рё С‚РµРїРµСЂСЊ РјРѕРіСѓС‚ РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°С‚СЊСЃСЏ РёР· sessionStorage РїРѕСЃР»Рµ reload/pagehide, РїРѕРєР° РѕРЅРё РµС‰С‘ РЅРµ СѓС€Р»Рё РІ СЏРІРЅРѕРµ СЃРѕС…СЂР°РЅРµРЅРёРµ.
+- text-specific guards РІ `PageEditorPage` СЃС‚Р°Р»Рё СЏРІРЅРµРµ: Р»РѕРіРёРєР° keyboard entry, text eraser, bottom-flip touch Рё СЃРѕР·РґР°РЅРёСЏ РЅРѕРІРѕРіРѕ text block РЅР°Рґ sheet surface СЂР°Р·РІРµРґРµРЅР° РїРѕ РѕС‚РґРµР»СЊРЅС‹Рј helper-РїСЂР°РІРёР»Р°Рј.
+- page touch gestures РІ `PageEditorPage` С‚РѕР¶Рµ СЃС‚Р°Р»Рё С‡РёС‰Рµ: start / abort / reset flip-gesture РґР»СЏ Р»РёСЃС‚Р° СЃРІРµРґРµРЅС‹ Рє РѕС‚РґРµР»СЊРЅС‹Рј helper-РїСЂР°РІРёР»Р°Рј, С‡С‚Рѕ РјРµРЅСЊС€Рµ РґСѓР±Р»РёСЂСѓРµС‚ touch-РІРµС‚РєРё Рё СѓРїСЂРѕС‰Р°РµС‚ РєРѕРЅС„Р»РёРєС‚С‹ РјРµР¶РґСѓ flip/select/drawing.
+- text-layer keyboard cleanup РІ `PageEditorPage` С‚РѕР¶Рµ СЃРІРµРґС‘РЅ Рє Р±РѕР»РµРµ СЏРІРЅРѕРјСѓ helper-РїСѓС‚Рё: pointer capture, blur Рё pen-triggered text deactivation РјРµРЅСЊС€Рµ РґСѓР±Р»РёСЂСѓСЋС‚ СЂСѓС‡РЅСѓСЋ Р»РѕРіРёРєСѓ.
+
+- page recovery/persistence draft objects СЃРѕР±РёСЂР°СЋС‚СЃСЏ С‡РµСЂРµР· РѕР±С‰РёР№ helper-layer `pageRecoveryDraft`, С‡С‚Рѕ РјРµРЅСЊС€Рµ РґСѓР±Р»РёСЂСѓРµС‚ РѕРґРёРЅ Рё С‚РѕС‚ Р¶Рµ page snapshot РІ РЅРµСЃРєРѕР»СЊРєРёС… persistence/recovery С‚РѕС‡РєР°С… `PageEditorPage`.
+- `v1.1 — Editor Foundation` РїРѕРґРІРµРґС‘РЅ Рє СЃРѕСЃС‚РѕСЏРЅРёСЋ almost-closed milestone: editor shell Р·Р°РјРµС‚РЅРѕ РјРµРЅСЊС€Рµ Р·Р°РІРёСЃРёС‚ РѕС‚ СЂР°Р·СЂРѕР·РЅРµРЅРЅС‹С… special-case paths РґР»СЏ text/media/shape/page gestures/recovery, Рё СЃР»РµРґСѓСЋС‰РёР№ РєСЂСѓРїРЅС‹Р№ С„РѕРєСѓСЃ Р»РѕРіРёС‡РЅРѕ СЃРјРµС‰Р°РµС‚СЃСЏ Рє `v1.2`.
+
+- persistence orchestration РІ `PageEditorPage` С‚РѕР¶Рµ СЃС‚Р°Р»Р° С‡РёС‰Рµ: build-path РґР»СЏ recovery draft Рё update payload СЃРІРµРґС‘РЅ Рє СЏРІРЅС‹Рј helper-Р°Рј РІРјРµСЃС‚Рѕ РїРѕРІС‚РѕСЂРµРЅРёСЏ РѕРґРЅРѕР№ Рё С‚РѕР№ Р¶Рµ page-shell С…РµРјС‹ РІ РЅРµСЃРєРѕР»СЊРєРёС… РјРµСЃС‚Р°С….
 
 ### Notes
 - Текущая версия ещё не считается финальным продуктом.

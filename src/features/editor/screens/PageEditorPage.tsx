@@ -22,6 +22,18 @@ import { ShapeInsertLibrary } from "@/features/editor/components/ShapeInsertLibr
 import { ShapeNoteLayer } from "@/features/editor/components/ShapeNoteLayer";
 import { ToolPresetPicker } from "@/features/editor/components/ToolPresetPicker";
 import { createEditorSelectionController, removeItemById, replaceItemById } from "@/features/editor/lib/interactionState";
+import {
+  clearPageDraftSnapshot,
+  clearPageRecoveryDraft,
+  createPageDraftSnapshot,
+  createPageRecoveryDraft,
+  PageDraftSnapshot,
+  readPageDraftSnapshot,
+  readPageRecoveryDraft,
+  serializePageRecoveryDraft,
+  writePageDraftSnapshot,
+  writePageRecoveryDraft,
+} from "@/features/editor/lib/pageRecoveryDraft";
 import { clampValue, isPointInBounds } from "@/features/editor/lib/transformUtils";
 import { useTextTransformController } from "@/features/editor/lib/useTextTransformController";
 import { getNotebook } from "@/features/notebooks/api/notebooks";
@@ -70,75 +82,18 @@ const TEXT_BLOCK_MIN_WIDTH = 180;
 const TEXT_BLOCK_MIN_HEIGHT = 84;
 const TEXT_BLOCK_DEFAULT_WIDTH = 280;
 const TEXT_BLOCK_MAX_WIDTH = 520;
-const PAGE_RECOVERY_DRAFT_PREFIX = "editor-page-draft:";
 const SAVE_STATE_LOADING = "Загрузка";
 const SAVE_STATE_PENDING = "Черновик";
 const SAVE_STATE_SAVED = "Все изменения сохранены";
 const SAVE_STATE_ERROR = "Ошибка сохранения";
 const DEFAULT_DRAWING_COLOR = "#111111";
 const quickPaletteColors = [DEFAULT_DRAWING_COLOR, "#d7e8ff", "#f8fbff", "#9ed0ff", "#7fffd4", "#d5ff72", "#ffd7b8", "#ff9d8c", "#c9cbc7"];
-const PAGE_DRAFT_STORAGE_PREFIX = "mybestipadapp:page-draft:";
 const PAGE_DRAFT_SYNC_DELAY_MS = 350;
 
 type CaretDocument = Document & {
   caretPositionFromPoint?: (x: number, y: number) => { offset: number } | null;
   caretRangeFromPoint?: (x: number, y: number) => Range | null;
 };
-
-interface PageDraftSnapshot {
-  pageId: string;
-  title: string;
-  paperType: PaperPresetId;
-  paperColor: string;
-  layout: PageLayout;
-  textElements: TextPageElement[];
-  strokes: DrawingStroke[];
-  savedAt: string;
-}
-
-function getPageDraftStorageKey(pageId: string) {
-  return `${PAGE_DRAFT_STORAGE_PREFIX}${pageId}`;
-}
-
-interface PageRecoveryDraft {
-  pageId: string;
-  title: string;
-  paperType: PaperPresetId;
-  paperColor: string;
-  layout: PageLayout;
-  textElements: TextPageElement[];
-}
-
-function getPageRecoveryDraftKey(pageId: string) {
-  return `${PAGE_RECOVERY_DRAFT_PREFIX}${pageId}`;
-}
-
-function serializePageRecoveryDraft(draft: PageRecoveryDraft) {
-  return JSON.stringify(draft);
-}
-
-function readPageRecoveryDraft(pageId: string) {
-  try {
-    const raw = window.sessionStorage.getItem(getPageRecoveryDraftKey(pageId));
-
-    if (!raw) {
-      return null;
-    }
-
-    const parsed = JSON.parse(raw) as PageRecoveryDraft;
-    return parsed.pageId === pageId ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearPageRecoveryDraft(pageId: string) {
-  try {
-    window.sessionStorage.removeItem(getPageRecoveryDraftKey(pageId));
-  } catch {
-    // Ignore sessionStorage availability issues and keep editor usable.
-  }
-}
 
 function getMaxElementZIndex(
   images: ImagePageElement[],
@@ -291,50 +246,33 @@ export function PageEditorPage() {
         ? "editor-sheet__status-pill--error"
         : "editor-sheet__status-pill--save";
 
-  function readPageDraftSnapshot(targetPageId: string) {
-    try {
-      const raw = window.sessionStorage.getItem(getPageDraftStorageKey(targetPageId));
-
-      if (!raw) {
-        return null;
-      }
-
-      return JSON.parse(raw) as PageDraftSnapshot;
-    } catch (error) {
-      console.warn("Failed to read page draft snapshot", error);
-      return null;
-    }
-  }
-
-  function clearPageDraftSnapshot(targetPageId: string) {
-    try {
-      window.sessionStorage.removeItem(getPageDraftStorageKey(targetPageId));
-    } catch (error) {
-      console.warn("Failed to clear page draft snapshot", error);
-    }
-  }
-
-  function writePageDraftSnapshot(targetPageId: string, snapshot: PageDraftSnapshot) {
-    try {
-      window.sessionStorage.setItem(getPageDraftStorageKey(targetPageId), JSON.stringify(snapshot));
-    } catch (error) {
-      console.warn("Failed to write page draft snapshot", error);
-    }
-  }
-
   function buildPageDraftSnapshot(targetPageId: string, nextStrokes = draftStrokesRef.current): PageDraftSnapshot {
-    return {
+    return createPageDraftSnapshot({
+      ...buildPageRecoveryDraftState(targetPageId),
+      strokes: nextStrokes.map((stroke) => ({
+        ...stroke,
+        pageId: targetPageId,
+      })),
+    });
+  }
+
+  function buildPageRecoveryDraftState(targetPageId: string) {
+    return createPageRecoveryDraft({
       pageId: targetPageId,
       title,
       paperType,
       paperColor,
       layout,
       textElements,
-      strokes: nextStrokes.map((stroke) => ({
-        ...stroke,
-        pageId: targetPageId,
-      })),
-      savedAt: new Date().toISOString(),
+    });
+  }
+
+  function buildPersistPageInput() {
+    return {
+      title,
+      paperType,
+      paperColor,
+      layout,
     };
   }
 
@@ -410,14 +348,16 @@ export function PageEditorPage() {
     setInsertPaperStyle(pageRecord.paperType);
     setInsertColor(pageRecord.paperColor);
     hasPendingStrokeSaveRef.current = Boolean(pageDraftSnapshot?.strokes.length);
-    persistedPageSnapshotRef.current = serializePageRecoveryDraft({
-      pageId: targetPageId,
-      title: pageRecord.title,
-      paperType: pageRecord.paperType,
-      paperColor: pageRecord.paperColor,
-      layout: pageRecord.layout,
-      textElements: baseTextElements,
-    });
+    persistedPageSnapshotRef.current = serializePageRecoveryDraft(
+      createPageRecoveryDraft({
+        pageId: targetPageId,
+        title: pageRecord.title,
+        paperType: pageRecord.paperType,
+        paperColor: pageRecord.paperColor,
+        layout: pageRecord.layout,
+        textElements: baseTextElements,
+      }),
+    );
     setSaveState(recoveryDraft || pageDraftSnapshot ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
     setStatus("ready");
     hydratedRef.current = true;
@@ -572,25 +512,14 @@ export function PageEditorPage() {
       return;
     }
 
-    const currentSnapshot = serializePageRecoveryDraft({
-      pageId,
-      title,
-      paperType,
-      paperColor,
-      layout,
-      textElements,
-    });
+    const currentSnapshot = serializePageRecoveryDraft(buildPageRecoveryDraftState(pageId));
 
     if (persistedPageSnapshotRef.current === currentSnapshot) {
       clearPageRecoveryDraft(pageId);
       return;
     }
 
-    try {
-      window.sessionStorage.setItem(getPageRecoveryDraftKey(pageId), currentSnapshot);
-    } catch {
-      // Ignore sessionStorage availability issues and keep editor usable.
-    }
+    writePageRecoveryDraft(pageId, buildPageRecoveryDraftState(pageId));
   }, [layout, pageId, paperColor, paperType, textElements, title]);
 
   useEffect(() => {
@@ -604,14 +533,7 @@ export function PageEditorPage() {
 
     draftSnapshotTimeoutRef.current = window.setTimeout(() => {
       draftSnapshotTimeoutRef.current = null;
-      const persistedShellSnapshot = serializePageRecoveryDraft({
-        pageId,
-        title,
-        paperType,
-        paperColor,
-        layout,
-        textElements,
-      });
+      const persistedShellSnapshot = serializePageRecoveryDraft(buildPageRecoveryDraftState(pageId));
 
       if (!hasPendingStrokeSaveRef.current && persistedPageSnapshotRef.current === persistedShellSnapshot) {
         clearPageDraftSnapshot(pageId);
@@ -665,12 +587,7 @@ export function PageEditorPage() {
     }
 
     try {
-      await updatePage(pageId, {
-        title,
-        paperType,
-        paperColor,
-        layout,
-      });
+      await updatePage(pageId, buildPersistPageInput());
       await replaceTextElements(pageId, textElements);
       if (includeDraftStrokes) {
         await replaceDrawingStrokes(
@@ -695,14 +612,7 @@ export function PageEditorPage() {
             }
           : currentPage,
       );
-      persistedPageSnapshotRef.current = serializePageRecoveryDraft({
-        pageId,
-        title,
-        paperType,
-        paperColor,
-        layout,
-        textElements,
-      });
+      persistedPageSnapshotRef.current = serializePageRecoveryDraft(buildPageRecoveryDraftState(pageId));
       clearPageRecoveryDraft(pageId);
       if (!hasPendingStrokeSaveRef.current) {
         clearPageDraftSnapshot(pageId);
@@ -1086,33 +996,21 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchStart(event: TouchEvent<HTMLDivElement>) {
-    if (isDeletingPage || isDrawingInteractionActive() || isOverlayTarget(event.target) || event.touches.length !== 1) {
-      touchStartXRef.current = null;
-      touchStartYRef.current = null;
-      touchStartTimeRef.current = null;
-      setSwipePreviewDirection("");
-      setSwipePreviewProgress(0);
-      setSwipePreviewOffsetX(0);
+    if (!canStartSheetTouchGesture(event.target, event.touches.length)) {
+      resetTouchFlipGesture();
       return;
     }
 
     if (hasActiveObjectSelection) {
       clearActiveObjectSelection();
-      touchStartXRef.current = null;
-      touchStartYRef.current = null;
-      touchStartTimeRef.current = null;
+      resetTouchFlipGesture();
       return;
     }
 
     const touch = event.touches[0];
 
     if (!touch || !isBottomFlipZone(touch.clientY)) {
-      touchStartXRef.current = null;
-      touchStartYRef.current = null;
-      touchStartTimeRef.current = null;
-      setSwipePreviewDirection("");
-      setSwipePreviewProgress(0);
-      setSwipePreviewOffsetX(0);
+      resetTouchFlipGesture();
       return;
     }
 
@@ -1122,14 +1020,21 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchMove(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectTransforming() || isDeletingPage || isDrawingInteractionActive()) {
+    if (shouldAbortSheetTouchGesture()) {
       return;
     }
 
-    const currentX = event.touches[0]?.clientX ?? touchStartXRef.current;
-    const currentY = event.touches[0]?.clientY ?? touchStartYRef.current ?? 0;
-    const deltaX = currentX - touchStartXRef.current;
-    const deltaY = currentY - (touchStartYRef.current ?? currentY);
+    const startX = touchStartXRef.current;
+    const startY = touchStartYRef.current;
+
+    if (startX === null) {
+      return;
+    }
+
+    const currentX = event.touches[0]?.clientX ?? startX;
+    const currentY = event.touches[0]?.clientY ?? startY ?? 0;
+    const deltaX = currentX - startX;
+    const deltaY = currentY - (startY ?? currentY);
 
     if (Math.abs(deltaX) < 20 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) {
       setSwipePreviewDirection("");
@@ -1151,34 +1056,35 @@ export function PageEditorPage() {
   }
 
   function handleSheetTouchEnd(event: TouchEvent<HTMLDivElement>) {
-    if (touchStartXRef.current === null || isObjectTransforming() || isDeletingPage || isDrawingInteractionActive()) {
+    if (shouldAbortSheetTouchGesture()) {
       return;
     }
 
-    const endX = event.changedTouches[0]?.clientX ?? touchStartXRef.current;
-    const endY = event.changedTouches[0]?.clientY ?? touchStartYRef.current ?? 0;
-    const delta = endX - touchStartXRef.current;
-    const deltaY = endY - (touchStartYRef.current ?? endY);
+    const startX = touchStartXRef.current;
+    const startY = touchStartYRef.current;
+
+    if (startX === null) {
+      return;
+    }
+
+    const endX = event.changedTouches[0]?.clientX ?? startX;
+    const endY = event.changedTouches[0]?.clientY ?? startY ?? 0;
+    const delta = endX - startX;
+    const deltaY = endY - (startY ?? endY);
     const gestureDuration = touchStartTimeRef.current === null ? 0 : performance.now() - touchStartTimeRef.current;
     const bounds = sheetPageRef.current?.getBoundingClientRect();
     const travelDistance = Math.max(220, (bounds?.width ?? 0) * 0.42);
     const releaseProgress = Math.min(Math.abs(delta) / travelDistance, 1);
-    touchStartXRef.current = null;
-    touchStartYRef.current = null;
-    touchStartTimeRef.current = null;
+    resetTouchFlipGesture();
 
     if (
       releaseProgress < PAGE_FLIP_RELEASE_THRESHOLD ||
       Math.abs(delta) <= Math.abs(deltaY) * 1.2 ||
       gestureDuration < PAGE_FLIP_MIN_GESTURE_MS
     ) {
-      setSwipePreviewDirection("");
-      setSwipePreviewProgress(0);
-      setSwipePreviewOffsetX(0);
       return;
     }
 
-    setSwipePreviewOffsetX(0);
     if (delta > 0) {
       void triggerFlip("prev");
     } else {
@@ -1237,6 +1143,70 @@ export function PageEditorPage() {
     return !isTextEditingMode() && !isObjectTransforming() && !isDrawingInteractionActive() && !hasActiveObjectSelection && !isDeletingPage;
   }
 
+  function shouldRoutePointerToTextEraser() {
+    return isEraserActive;
+  }
+
+  function shouldBlockKeyboardTextEntry(pointerType: ReactPointerEvent<HTMLElement>["pointerType"]) {
+    return isDrawingPointer(pointerType);
+  }
+
+  function shouldCaptureTextLayerPointer(pointerType: ReactPointerEvent<HTMLElement>["pointerType"]) {
+    return shouldRoutePointerToTextEraser() || shouldBlockKeyboardTextEntry(pointerType);
+  }
+
+  function shouldHandleBottomFlipTouch(pointerType: ReactPointerEvent<HTMLDivElement>["pointerType"], clientY: number) {
+    return pointerType === "touch" && isBottomFlipZone(clientY);
+  }
+
+  function resetTouchFlipGesture() {
+    touchStartXRef.current = null;
+    touchStartYRef.current = null;
+    touchStartTimeRef.current = null;
+    setSwipePreviewDirection("");
+    setSwipePreviewProgress(0);
+    setSwipePreviewOffsetX(0);
+  }
+
+  function canStartSheetTouchGesture(target: EventTarget | null, touchesLength: number) {
+    return !isDeletingPage && !isDrawingInteractionActive() && !isOverlayTarget(target) && touchesLength === 1;
+  }
+
+  function shouldAbortSheetTouchGesture() {
+    return touchStartXRef.current === null || isObjectTransforming() || isDeletingPage || isDrawingInteractionActive();
+  }
+
+  function canCreateTextFromSheetPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    if (isDrawingPointer(event.pointerType, event.altKey)) {
+      return false;
+    }
+
+    if (hasActiveObjectSelection || !isIdleForNewText()) {
+      return false;
+    }
+
+    return Boolean(pageId);
+  }
+
+  function buildNewTextElementAtPoint(clientX: number, clientY: number) {
+    if (!pageId) {
+      return null;
+    }
+
+    const frame = getTextElementFrameAtPoint(clientX, clientY);
+
+    if (!frame) {
+      return null;
+    }
+
+    return {
+      ...buildEditorTextElement(pageId, null, notebook?.bindingType, textColor),
+      id: createId("element"),
+      ...frame,
+      zIndex: zIndexCounterRef.current++,
+    };
+  }
+
   function getTextElementFrameAtPoint(clientX: number, clientY: number) {
     const bounds = sheetPageRef.current?.getBoundingClientRect();
     const point = getStagePoint(clientX, clientY);
@@ -1271,6 +1241,22 @@ export function PageEditorPage() {
 
     selectTextElement(targetId, { editing: true });
     enableKeyboardTextMode(targetId);
+  }
+
+  function deactivateKeyboardEditing(targetId: string, options?: { blur?: boolean; keepSelection?: boolean }) {
+    if (!options?.keepSelection && activeTextElementId === targetId) {
+      setIsKeyboardTextMode(false);
+    }
+
+    const textArea = textInputRefs.current[targetId];
+    textArea?.setAttribute("inputmode", "none");
+
+    if (textArea) {
+      textArea.readOnly = true;
+      if (options?.blur) {
+        textArea.blur();
+      }
+    }
   }
 
   function focusTextInput(targetId: string) {
@@ -1477,18 +1463,16 @@ export function PageEditorPage() {
   }
 
   function handleTextLayerPointerDown(targetId: string, event: ReactPointerEvent<HTMLTextAreaElement>) {
-    if (isEraserActive) {
+    if (shouldRoutePointerToTextEraser()) {
       selectTextElement(targetId);
       event.preventDefault();
       eraseTextAtPoint(targetId, event.clientX, event.clientY);
       return;
     }
 
-    if (isDrawingPointer(event.pointerType)) {
+    if (shouldBlockKeyboardTextEntry(event.pointerType)) {
       event.preventDefault();
-      setIsKeyboardTextMode(false);
-      textInputRefs.current[targetId]?.setAttribute("inputmode", "none");
-      textInputRefs.current[targetId]?.blur();
+      deactivateKeyboardEditing(targetId, { blur: true, keepSelection: true });
       return;
     }
 
@@ -1496,24 +1480,19 @@ export function PageEditorPage() {
   }
 
   function handleTextLayerPointerMoveCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
-    if (isEraserActive) {
-      event.preventDefault();
-      return;
-    }
-
-    if (event.pointerType === "pen") {
+    if (shouldCaptureTextLayerPointer(event.pointerType)) {
       event.preventDefault();
     }
   }
 
   function handleTextLayerPointerUpCapture(event: ReactPointerEvent<HTMLTextAreaElement>) {
-    if (isEraserActive) {
+    if (shouldRoutePointerToTextEraser()) {
       event.preventDefault();
       lastTextEraseSignatureRef.current = null;
       return;
     }
 
-    if (event.pointerType === "pen") {
+    if (shouldBlockKeyboardTextEntry(event.pointerType)) {
       event.preventDefault();
     }
   }
@@ -1523,14 +1502,7 @@ export function PageEditorPage() {
       return;
     }
 
-    if (activeTextElementId === targetId) {
-      setIsKeyboardTextMode(false);
-    }
-
-    textInputRefs.current[targetId]?.setAttribute("inputmode", "none");
-    if (textInputRefs.current[targetId]) {
-      textInputRefs.current[targetId]!.readOnly = true;
-    }
+    deactivateKeyboardEditing(targetId);
   }
 
   function handleTextLayerPointerMove(targetId: string, event: ReactPointerEvent<HTMLTextAreaElement>) {
@@ -1559,7 +1531,7 @@ export function PageEditorPage() {
       return;
     }
 
-    if (event.pointerType === "touch" && isBottomFlipZone(event.clientY)) {
+    if (shouldHandleBottomFlipTouch(event.pointerType, event.clientY)) {
       if (hasActiveObjectSelection) {
         clearActiveObjectSelection();
       } else {
@@ -1574,27 +1546,16 @@ export function PageEditorPage() {
         return;
       }
 
-      if (!isIdleForNewText()) {
+      if (!canCreateTextFromSheetPointer(event)) {
         return;
       }
 
       setActiveElementId(null);
-      if (!pageId) {
+      const nextTextElement = buildNewTextElementAtPoint(event.clientX, event.clientY);
+
+      if (!nextTextElement) {
         return;
       }
-
-      const frame = getTextElementFrameAtPoint(event.clientX, event.clientY);
-
-      if (!frame) {
-        return;
-      }
-
-      const nextTextElement = {
-        ...buildEditorTextElement(pageId, null, notebook?.bindingType, textColor),
-        id: createId("element"),
-        ...frame,
-        zIndex: zIndexCounterRef.current++,
-      };
 
       flushSync(() => {
         setTextElements((current) => [...current, nextTextElement]);
