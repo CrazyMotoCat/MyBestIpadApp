@@ -1,23 +1,46 @@
-const PWA_UPDATE_EVENT = "mybestipadapp:pwa-update-state";
-const PWA_UPDATE_AVAILABLE_EVENT = "mybestipadapp:pwa-update-available";
-const PWA_CONTROLLER_UPDATED_EVENT = "mybestipadapp:pwa-controller-updated";
+export const PWA_UPDATE_EVENT = "mybestipadapp:pwa-update-state";
+export const PWA_UPDATE_AVAILABLE_EVENT = "mybestipadapp:pwa-update-available";
+export const PWA_CONTROLLER_UPDATED_EVENT = "mybestipadapp:pwa-controller-updated";
 
-function emitPwaUpdateState(status: "checking" | "update-ready" | "activated") {
+export type PwaControllerUpdatedReason = "initial-control" | "update";
+
+function emitPwaUpdateState(status: "checking" | "update-ready" | "activated", detail?: Record<string, unknown>) {
   window.dispatchEvent(
     new CustomEvent(PWA_UPDATE_EVENT, {
       detail: {
         status,
+        ...detail,
       },
     }),
   );
 
   if (status === "update-ready") {
-    window.dispatchEvent(new Event(PWA_UPDATE_AVAILABLE_EVENT));
+    window.dispatchEvent(new CustomEvent(PWA_UPDATE_AVAILABLE_EVENT, { detail }));
   }
 
   if (status === "activated") {
-    window.dispatchEvent(new Event(PWA_CONTROLLER_UPDATED_EVENT));
+    window.dispatchEvent(new CustomEvent(PWA_CONTROLLER_UPDATED_EVENT, { detail }));
   }
+}
+
+async function getAppRegistration() {
+  if (!("serviceWorker" in navigator)) {
+    return undefined;
+  }
+
+  return navigator.serviceWorker.getRegistration().catch(() => undefined);
+}
+
+export async function applyServiceWorkerUpdate() {
+  const registration = await getAppRegistration();
+  const waitingWorker = registration?.waiting;
+
+  if (!waitingWorker) {
+    return false;
+  }
+
+  waitingWorker.postMessage({ type: "SKIP_WAITING" });
+  return true;
 }
 
 export function registerServiceWorker() {
@@ -85,6 +108,8 @@ export function registerServiceWorker() {
     navigator.serviceWorker
       .register(serviceWorkerUrl, { scope: baseUrl.pathname })
       .then((registration) => {
+        let hasSeenController = Boolean(navigator.serviceWorker.controller);
+
         const primeWindowCache = async () => {
           if (!("caches" in window)) {
             return;
@@ -131,21 +156,18 @@ export function registerServiceWorker() {
               if (navigator.serviceWorker.controller) {
                 emitPwaUpdateState("update-ready");
               }
-
-              if (registration.waiting) {
-                registration.waiting.postMessage({ type: "SKIP_WAITING" });
-              }
             }
           });
         });
 
         navigator.serviceWorker.addEventListener("controllerchange", () => {
-          emitPwaUpdateState("activated");
+          const reason: PwaControllerUpdatedReason = hasSeenController ? "update" : "initial-control";
+          hasSeenController = true;
+          emitPwaUpdateState("activated", { reason });
         });
 
         if (registration.waiting) {
           emitPwaUpdateState("update-ready");
-          registration.waiting.postMessage({ type: "SKIP_WAITING" });
         }
 
         void navigator.serviceWorker.ready.then((readyRegistration) => {

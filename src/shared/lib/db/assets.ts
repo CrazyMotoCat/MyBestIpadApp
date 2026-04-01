@@ -7,6 +7,7 @@ import {
   throwIfLikelyOverQuota,
   toStorageWriteError,
 } from "@/shared/lib/db/storageErrors";
+import { recordStorageWriteFailure, recordStorageWriteSuccess } from "@/shared/lib/db/storageHealth";
 import { createId } from "@/shared/lib/utils/id";
 import { AssetKind, StoredAsset } from "@/shared/types/models";
 
@@ -41,11 +42,12 @@ export async function saveBlobAsset(
 
   try {
     await db.put("assets", asset);
+    recordStorageWriteSuccess("save asset", `Сохранено локальное вложение ${asset.name}.`);
+    return asset;
   } catch (error) {
+    recordStorageWriteFailure("save asset", error, "Не удалось сохранить вложение.");
     throw toStorageWriteError(error, "сохранить вложение");
   }
-
-  return asset;
 }
 
 export async function saveFileAsset(ownerId: string, file: File, kind: AssetKind) {
@@ -67,7 +69,14 @@ export async function getAssetById(assetId: string) {
 
 export async function deleteAssetById(assetId: string) {
   const db = await getDatabase();
-  await db.delete("assets", assetId);
+
+  try {
+    await db.delete("assets", assetId);
+    recordStorageWriteSuccess("delete asset", `Локальное вложение ${assetId} удалено.`);
+  } catch (error) {
+    recordStorageWriteFailure("delete asset", error, "Не удалось удалить локальное вложение.");
+    throw error;
+  }
 }
 
 export async function getAssetObjectUrl(assetId: string) {

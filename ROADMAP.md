@@ -70,6 +70,7 @@ In progress now:
 - подготовить экспорт/импорт как резервный путь восстановления.
 
 In progress now:
+- Sprint 1 по offline launch hardening фактически закрыт: app shell и `PWA статус` используют единый readiness/runtime contract, update flow переведён в явный `apply update -> reload`, а для релизной проверки есть отдельный smoke-pack `SPRINT_1_SMOKE_PACK.md`.
 - первый шаг взят с самого безопасного слоя: storage/quota diagnostics в `PWA статус`, чтобы local-first поведение стало наблюдаемым до более рискованных изменений service worker и offline install path.
 - следующий подшаг на том же слое: явный recovery path прямо в `PWA статус`, чтобы при warning/danger состоянии пользователь сразу видел, что делать с локальным хранилищем и крупными вложениями.
 - текущий практический шаг на том же слое: quota-safe upload flow для изображений, файлов, обложек и фона, чтобы IndexedDB/storage ошибки не терялись молча в editor/notebook/background сценариях.
@@ -84,6 +85,9 @@ In progress now:
 - поверх этого readiness contract install/offline UX теперь развивается в пошаговый flow, чтобы пользователь видел не только итоговый статус, но и текущий прогресс: HTTPS/SW, прогрев shell, запуск как иконка iPad.
 - на том же reliability-слое теперь появляется и ручной backup fallback: экспорт/импорт локальной базы, чтобы recovery path не зависел только от service worker и текущего браузерного storage state.
 - следующий cleanup этого же пути уже закрыт: backup import должен полностью сбрасывать stale recovery drafts и перезагружать приложение в чистое восстановленное состояние, а не оставлять старый screen-state поверх новой базы.
+- следующий support/debug слой `v1.2` уже добавлен в `PWA статус`: там теперь видны доступность `IndexedDB`/`localStorage`, последний известный результат локальной записи и общий storage health summary без необходимости открывать DevTools.
+- тот же reliability-слой теперь делает явными и pending page recovery drafts: `PWA статус` показывает, сколько их осталось, из каких storage-источников они пришли и какого они типа (`recovery` / `snapshot`).
+- следующий cleanup на том же слое тоже уже начат: stale recovery drafts можно вручную очистить из `PWA статуса`, чтобы reopen/recovery сценарии было проще сбрасывать в чистое состояние при QA и поддержке.
 
 ### v1.3 — Notebook Power Features
 - добавить шаблоны блокнотов и стартовых страниц;
@@ -91,6 +95,15 @@ In progress now:
 - добавить поиск по блокнотам и страницам;
 - улучшить организацию вложений и page metadata;
 - подготовить готовые продуктовые сценарии вроде дневника и проектного блокнота.
+
+In progress now:
+- этап начат с самого прикладного слоя: локальный поиск по блокнотам и страницам, фильтр bookmarked pages, поиск по закладкам в редакторе и быстрый jump-strip внутри блокнота;
+- следующий логичный шаг внутри `v1.3`: richer thumbnails / recent pages / pinned metadata без тяжёлого рефактора editor flow.
+
+In progress now:
+- первый безопасный шаг уже начат: локальный поиск появился на главном экране, на экране блокнота и в панели закладок редактора;
+- экран блокнота получил компактный `page strip` с быстрым переходом по недавним страницам и мини-метаданными листов;
+- следующий логичный подшаг внутри `v1.3`: либо добавить page thumbnails/richer page metadata глубже, либо перейти к notebook templates и стартовым сценариям.
 
 ### v1.4 — Quality, Polish, Shipping
 - закрыть сценарные тесты вокруг editor/data/storage flows;
@@ -271,10 +284,10 @@ Success signal:
 ## Suggested immediate next steps
 
 Лучший практический порядок сейчас:
-1. Начать `v1.1` с единой модели активного объекта: selection, deselect, move, resize, delete без конфликтов с page flip и созданием нового текста.
-2. Довести эту же модель до одинакового поведения text / image / file / shape note.
-3. После этого переходить к `v1.2`: local persistence, quota/error handling и offline recovery.
-4. Только затем расширять product power-features и shipping quality layer.
+1. Дожать оставшийся `v1.2` слой вокруг blob-heavy recovery: cleanup guidance для самых тяжёлых notebook/background scenarios и более явные действия после quota-pressure.
+2. Расширять automated safety net вокруг storage/offline helper-ов, storage health summary и reopen/recovery сценариев.
+3. После этого переходить к более глубокому `v1.3`: thumbnails, richer page metadata и templates.
+4. Только затем расширять product growth слой дальше, не размывая offline/storage reliability фокус.
 
 ## Explicit non-goals for the near term
 

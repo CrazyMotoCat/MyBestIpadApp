@@ -7,9 +7,31 @@ import {
   importDatabaseBackup,
 } from "@/shared/lib/db/backup";
 import { getOfflineReadinessView, getStandaloneState } from "@/shared/lib/pwa/offlineReadiness";
+import {
+  EMPTY_SERVICE_WORKER_RUNTIME_STATUS,
+  parseServiceWorkerRuntimeStatus,
+  requestServiceWorkerRuntimeStatus,
+  ServiceWorkerRuntimeStatus,
+} from "@/shared/lib/pwa/runtimeStatus";
+import {
+  PWA_CONTROLLER_UPDATED_EVENT,
+  PWA_UPDATE_AVAILABLE_EVENT,
+  PwaControllerUpdatedReason,
+} from "@/shared/lib/pwa/registerServiceWorker";
 import { formatStorageBytes } from "@/shared/lib/db/storageErrors";
+import {
+  getStorageHealthSummarySnapshot,
+  recordStorageWriteFailure,
+  recordStorageWriteSuccess,
+  StorageHealthSummary,
+} from "@/shared/lib/db/storageHealth";
 import { auditStorageIntegrity, repairStorageIntegrity, StorageIntegrityReport } from "@/shared/lib/db/storageIntegrity";
 import { getStorageInsightsSummary, StorageInsightsSummary } from "@/shared/lib/db/storageInsights";
+import {
+  clearAllPendingPageRecoveryDrafts,
+  getPageRecoveryDraftDiagnostics,
+  PageRecoveryDraftDiagnostics,
+} from "@/features/editor/lib/pageRecoveryDraftDiagnostics";
 
 interface PwaStatusSnapshot {
   isOnline: boolean;
@@ -17,46 +39,13 @@ interface PwaStatusSnapshot {
   isSecureContext: boolean;
   hasServiceWorker: boolean;
   isControlled: boolean;
-  hasOfflineShell: boolean;
   storageQuotaBytes: number | null;
   storageUsageBytes: number | null;
   isPersistentStorage: boolean | null;
 }
 
-interface ServiceWorkerRuntimeStatus {
-  cacheVersion: string | null;
-  checkedAt: string | null;
-  hasOfflineShell: boolean | null;
-}
-
-const STATIC_CACHE = "mybestipadapp-static-v7";
-
-async function probeOfflineShell() {
-  if (!window.isSecureContext || !("caches" in window)) {
-    return false;
-  }
-
-  try {
-    const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
-    const scopeUrl = new URL("./", baseUrl).toString();
-    const indexUrl = new URL("./index.html", baseUrl).toString();
-    const offlineUrl = new URL("./offline.html", baseUrl).toString();
-    const cache = await caches.open(STATIC_CACHE);
-
-    const [shellResponse, indexResponse, offlineResponse] = await Promise.all([
-      cache.match(scopeUrl, { ignoreSearch: true }),
-      cache.match(indexUrl, { ignoreSearch: true }),
-      cache.match(offlineUrl, { ignoreSearch: true }),
-    ]);
-
-    return Boolean(shellResponse || indexResponse || offlineResponse);
-  } catch {
-    return false;
-  }
-}
-
-function getStatusTone(snapshot: PwaStatusSnapshot) {
-  if (snapshot.hasServiceWorker && snapshot.isControlled && snapshot.hasOfflineShell) {
+function getStatusTone(snapshot: PwaStatusSnapshot, hasOfflineShell: boolean) {
+  if (snapshot.hasServiceWorker && snapshot.isControlled && hasOfflineShell) {
     return "ready";
   }
 
@@ -183,7 +172,6 @@ async function collectSnapshot(): Promise<PwaStatusSnapshot> {
     isSecureContext: window.isSecureContext,
     hasServiceWorker: "serviceWorker" in navigator,
     isControlled: Boolean(navigator.serviceWorker?.controller),
-    hasOfflineShell: await probeOfflineShell(),
     storageQuotaBytes,
     storageUsageBytes,
     isPersistentStorage,
@@ -196,21 +184,20 @@ export function PwaStatusBadge() {
   const [isExportingBackup, setIsExportingBackup] = useState(false);
   const [isImportingBackup, setIsImportingBackup] = useState(false);
   const [isRepairingStorage, setIsRepairingStorage] = useState(false);
+  const [isClearingDrafts, setIsClearingDrafts] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
-  const [swRuntimeStatus, setSwRuntimeStatus] = useState<ServiceWorkerRuntimeStatus>({
-    cacheVersion: null,
-    checkedAt: null,
-    hasOfflineShell: null,
-  });
+  const [swRuntimeStatus, setSwRuntimeStatus] = useState<ServiceWorkerRuntimeStatus>(EMPTY_SERVICE_WORKER_RUNTIME_STATUS);
+  const [updateState, setUpdateState] = useState<"idle" | "update-ready" | "reload-required">("idle");
   const [storageInsights, setStorageInsights] = useState<StorageInsightsSummary | null>(null);
   const [storageIntegrity, setStorageIntegrity] = useState<StorageIntegrityReport | null>(null);
+  const [storageHealth, setStorageHealth] = useState<StorageHealthSummary | null>(null);
+  const [draftDiagnostics, setDraftDiagnostics] = useState<PageRecoveryDraftDiagnostics | null>(null);
   const [snapshot, setSnapshot] = useState<PwaStatusSnapshot>({
     isOnline: navigator.onLine,
     isStandalone: getStandaloneState(),
     isSecureContext: window.isSecureContext,
     hasServiceWorker: "serviceWorker" in navigator,
     isControlled: Boolean(navigator.serviceWorker?.controller),
-    hasOfflineShell: false,
     storageQuotaBytes: null,
     storageUsageBytes: null,
     isPersistentStorage: null,
@@ -218,34 +205,36 @@ export function PwaStatusBadge() {
   const backupInputRef = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async () => {
-    const [nextSnapshot, nextInsights, nextIntegrity] = await Promise.all([
+    const [nextSnapshot, nextInsights, nextIntegrity, nextHealth] = await Promise.all([
       collectSnapshot(),
       getStorageInsightsSummary(),
       auditStorageIntegrity(),
+      getStorageHealthSummarySnapshot(),
     ]);
     setSnapshot(nextSnapshot);
     setStorageInsights(nextInsights);
     setStorageIntegrity(nextIntegrity);
-  }, []);
-
-  const requestServiceWorkerStatus = useCallback(() => {
-    navigator.serviceWorker?.controller?.postMessage({ type: "REQUEST_STATUS" });
+    setStorageHealth(nextHealth);
+    setDraftDiagnostics(getPageRecoveryDraftDiagnostics());
   }, []);
 
   useEffect(() => {
     let isMounted = true;
 
     const refreshIfMounted = async () => {
-      const [nextSnapshot, nextInsights, nextIntegrity] = await Promise.all([
+      const [nextSnapshot, nextInsights, nextIntegrity, nextHealth] = await Promise.all([
         collectSnapshot(),
         getStorageInsightsSummary(),
         auditStorageIntegrity(),
+        getStorageHealthSummarySnapshot(),
       ]);
 
       if (isMounted) {
         setSnapshot(nextSnapshot);
         setStorageInsights(nextInsights);
         setStorageIntegrity(nextIntegrity);
+        setStorageHealth(nextHealth);
+        setDraftDiagnostics(getPageRecoveryDraftDiagnostics());
       }
     };
 
@@ -263,19 +252,26 @@ export function PwaStatusBadge() {
     };
     const handleControllerChange = () => {
       void refreshIfMounted();
-      requestServiceWorkerStatus();
+      void requestServiceWorkerRuntimeStatus();
+    };
+    const handleUpdateAvailable = () => {
+      if (isMounted) {
+        setUpdateState("update-ready");
+      }
+    };
+    const handleControllerUpdated = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: PwaControllerUpdatedReason }>).detail?.reason;
+
+      if (reason !== "update" || !isMounted) {
+        return;
+      }
+
+      setUpdateState("reload-required");
     };
     const handleWorkerMessage = (event: MessageEvent) => {
-      const payload = event.data as
-        | {
-            type?: string;
-            cacheVersion?: string;
-            checkedAt?: string;
-            hasOfflineShell?: boolean;
-          }
-        | undefined;
+      const nextStatus = parseServiceWorkerRuntimeStatus(event.data);
 
-      if (payload?.type !== "SW_STATUS") {
+      if (!nextStatus) {
         return;
       }
 
@@ -283,11 +279,7 @@ export function PwaStatusBadge() {
         return;
       }
 
-      setSwRuntimeStatus({
-        cacheVersion: payload.cacheVersion ?? null,
-        checkedAt: payload.checkedAt ?? null,
-        hasOfflineShell: payload.hasOfflineShell ?? null,
-      });
+      setSwRuntimeStatus(nextStatus);
     };
 
     if (typeof mediaQuery.addEventListener === "function") {
@@ -299,9 +291,11 @@ export function PwaStatusBadge() {
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("online", handleConnectivity);
     window.addEventListener("offline", handleConnectivity);
+    window.addEventListener(PWA_UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+    window.addEventListener(PWA_CONTROLLER_UPDATED_EVENT, handleControllerUpdated);
     navigator.serviceWorker?.addEventListener("controllerchange", handleControllerChange);
     navigator.serviceWorker?.addEventListener("message", handleWorkerMessage);
-    requestServiceWorkerStatus();
+    void requestServiceWorkerRuntimeStatus();
 
     return () => {
       isMounted = false;
@@ -314,12 +308,14 @@ export function PwaStatusBadge() {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("online", handleConnectivity);
       window.removeEventListener("offline", handleConnectivity);
+      window.removeEventListener(PWA_UPDATE_AVAILABLE_EVENT, handleUpdateAvailable);
+      window.removeEventListener(PWA_CONTROLLER_UPDATED_EVENT, handleControllerUpdated);
       navigator.serviceWorker?.removeEventListener("controllerchange", handleControllerChange);
       navigator.serviceWorker?.removeEventListener("message", handleWorkerMessage);
     };
-  }, [requestServiceWorkerStatus]);
+  }, []);
 
-  const tone = getStatusTone(snapshot);
+  const tone = getStatusTone(snapshot, swRuntimeStatus.hasOfflineShell === true);
   const storageUsagePercent = getStorageUsagePercent(snapshot);
   const storageTone = getStorageUsageTone(storageUsagePercent);
   const storageRecoverySteps = getStorageRecoverySteps(storageTone);
@@ -363,9 +359,12 @@ export function PwaStatusBadge() {
       }
 
       const summary = await downloadDatabaseBackup();
+      recordStorageWriteSuccess("export backup", `Резервная копия экспортирована: ${formatBackupSummary(summary)}.`);
       setBackupMessage(`Локальная копия базы экспортирована в JSON-файл: ${formatBackupSummary(summary)}.`);
+      await refresh();
     } catch (error) {
       console.error("Backup export failed", error);
+      recordStorageWriteFailure("export backup", error, "Не удалось экспортировать локальную копию базы.");
       setBackupMessage("Не удалось экспортировать локальную копию базы.");
     } finally {
       setIsExportingBackup(false);
@@ -395,11 +394,13 @@ export function PwaStatusBadge() {
       setIsImportingBackup(true);
       setBackupMessage(null);
       await importDatabaseBackup(file);
+      recordStorageWriteSuccess("import backup", `Локальная база импортирована из ${file.name}.`);
       setBackupMessage("Backup импортирован. Перезагружаем приложение...");
       await refresh();
       window.setTimeout(() => window.location.reload(), 700);
     } catch (error) {
       console.error("Backup import failed", error);
+      recordStorageWriteFailure("import backup", error, "Не удалось импортировать backup-файл.");
       setBackupMessage(error instanceof Error ? error.message : "Не удалось импортировать backup-файл.");
     } finally {
       event.target.value = "";
@@ -425,9 +426,34 @@ export function PwaStatusBadge() {
       );
     } catch (error) {
       console.error("Storage repair failed", error);
+      recordStorageWriteFailure("repair storage integrity", error, "Не удалось автоматически починить локальные ссылки.");
       setBackupMessage("Не удалось автоматически починить локальные ссылки.");
     } finally {
       setIsRepairingStorage(false);
+    }
+  }
+
+  async function handleClearDrafts() {
+    if (
+      !window.confirm(
+        "Приложение очистит pending recovery drafts и snapshot-черновики страницы из sessionStorage/localStorage. Продолжить?",
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setIsClearingDrafts(true);
+      clearAllPendingPageRecoveryDrafts();
+      recordStorageWriteSuccess("clear recovery drafts", "Локальные recovery drafts и snapshot-черновики очищены.");
+      await refresh();
+      setBackupMessage("Локальные recovery drafts очищены.");
+    } catch (error) {
+      console.error("Draft cleanup failed", error);
+      recordStorageWriteFailure("clear recovery drafts", error, "Не удалось очистить recovery drafts.");
+      setBackupMessage("Не удалось очистить recovery drafts.");
+    } finally {
+      setIsClearingDrafts(false);
     }
   }
 
@@ -477,7 +503,7 @@ export function PwaStatusBadge() {
           </div>
           <div className="pwa-status__row">
             <span>Офлайн-оболочка</span>
-            <strong>{snapshot.hasOfflineShell ? "В кэше" : "Не прогрета"}</strong>
+            <strong>{swRuntimeStatus.hasOfflineShell ? "Подтверждена SW" : "Не подтверждена"}</strong>
           </div>
           <div className="pwa-status__row">
             <span>SW cache contract</span>
@@ -485,6 +511,16 @@ export function PwaStatusBadge() {
               {swRuntimeStatus.cacheVersion
                 ? `${swRuntimeStatus.cacheVersion}${swRuntimeStatus.hasOfflineShell ? " • shell ready" : " • warming"}`
                 : "Нет ответа"}
+            </strong>
+          </div>
+          <div className="pwa-status__row">
+            <span>Обновление оболочки</span>
+            <strong>
+              {updateState === "reload-required"
+                ? "Нужна перезагрузка"
+                : updateState === "update-ready"
+                  ? "Ждёт применения"
+                  : "Без ожидания"}
             </strong>
           </div>
           <div className="pwa-status__row">
@@ -510,6 +546,55 @@ export function PwaStatusBadge() {
                   ? `Локальное хранилище занято примерно на ${storageUsagePercent}%. С крупными изображениями и файлами лучше работать осторожнее.`
                   : `Локальное хранилище занято примерно на ${storageUsagePercent}%. Запас по quota пока выглядит нормально.`}
           </div>
+          {storageHealth ? (
+            <div className={`pwa-status__actions pwa-status__readiness pwa-status__readiness--${storageHealth.tone}`}>
+              <div className="pwa-status__actions-title">{storageHealth.title}</div>
+              <div className="pwa-status__readiness-text">{storageHealth.description}</div>
+              <ul className="pwa-status__actions-list">
+                {storageHealth.details.map((detail) => (
+                  <li key={detail}>{detail}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {draftDiagnostics && draftDiagnostics.totalEntries > 0 ? (
+            <div className="pwa-status__actions">
+              <div className="pwa-status__actions-title">Pending recovery drafts</div>
+              <div className="pwa-status__readiness-text">
+                Найдены незавершённые page recovery drafts. Это полезный safety net для reopen/recovery, но под quota-pressure их
+                тоже полезно видеть и уметь очищать вручную.
+              </div>
+              <div className="pwa-status__cleanup-meta">
+                Всего записей: {draftDiagnostics.totalEntries} • страниц: {draftDiagnostics.uniquePageCount} • sessionStorage:{" "}
+                {draftDiagnostics.sourceCounts.sessionStorage} • localStorage: {draftDiagnostics.sourceCounts.localStorage}
+              </div>
+              <div className="pwa-status__cleanup-meta">
+                Recovery: {draftDiagnostics.kindCounts.recovery} • Snapshot: {draftDiagnostics.kindCounts.snapshot}
+                {draftDiagnostics.invalidEntryCount > 0 ? ` • подозрительных записей: ${draftDiagnostics.invalidEntryCount}` : ""}
+              </div>
+              <div className="pwa-status__cleanup-list">
+                {draftDiagnostics.pages.map((page) => (
+                  <div key={page.pageId} className="pwa-status__cleanup-item">
+                    <div className="pwa-status__cleanup-head">
+                      <strong>{page.pageId}</strong>
+                      <span>{page.entryCount}</span>
+                    </div>
+                    <div className="pwa-status__cleanup-meta">
+                      {page.sources.join(" • ")} • {page.kinds.join(" • ")}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="pwa-status__action-button"
+                onClick={() => void handleClearDrafts()}
+                disabled={isClearingDrafts}
+              >
+                {isClearingDrafts ? "Очищаем..." : "Очистить recovery drafts"}
+              </button>
+            </div>
+          ) : null}
           <div className={`pwa-status__readiness pwa-status__readiness--${offlineReadiness.tone}`}>
             <div className="pwa-status__actions-title">{offlineReadiness.title}</div>
             <div className="pwa-status__readiness-text">{offlineReadiness.description}</div>
@@ -541,6 +626,16 @@ export function PwaStatusBadge() {
               Проверить статус ещё раз
             </button>
           </div>
+          {updateState !== "idle" ? (
+            <div className="pwa-status__actions">
+              <div className="pwa-status__actions-title">Состояние обновления</div>
+              <div className="pwa-status__readiness-text">
+                {updateState === "update-ready"
+                  ? "Новая версия офлайн-оболочки уже найдена. Примените обновление в верхнем баннере, чтобы не оставаться на старом screen-state."
+                  : "Новый Service Worker уже активирован. Перезагрузите приложение, чтобы экран и кэш снова работали в одном состоянии."}
+              </div>
+            </div>
+          ) : null}
           {storageRecoverySteps.length ? (
             <div className="pwa-status__actions">
               <div className="pwa-status__actions-title">Что делать сейчас</div>

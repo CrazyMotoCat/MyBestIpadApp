@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { createNotebook, deleteNotebook, listNotebooks } from "@/features/notebooks/api/notebooks";
 import { BackgroundSettingsModal } from "@/features/notebooks/components/BackgroundSettingsModal";
@@ -32,8 +32,19 @@ export function NotebooksPage() {
   const [deleteOffset, setDeleteOffset] = useState({ x: 0, y: 0 });
   const [deleteDragOffset, setDeleteDragOffset] = useState({ x: 0, y: 0 });
   const [backgroundUploadError, setBackgroundUploadError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const trashButtonRef = useRef<HTMLButtonElement | null>(null);
   const deleteTimeoutRef = useRef<number | null>(null);
+
+  const filteredNotebooks = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return notebooks;
+    }
+
+    return notebooks.filter((notebook) => notebook.title.toLowerCase().includes(normalizedQuery));
+  }, [notebooks, searchQuery]);
 
   async function load() {
     setIsBusy(true);
@@ -131,8 +142,8 @@ export function NotebooksPage() {
         <span className="hero-block__eyebrow">Офлайн-блокнот для iPad</span>
         <h1 className="hero-block__title">Мои блокноты</h1>
         <p className="hero-block__subtitle">
-          Космос, мото-эстетика и локальное хранение без сервера. Блокноты, страницы, рисунки, изображения, файлы и фон
-          приложения сохраняются прямо на устройстве.
+          Космос, мото-эстетика и локальное хранение без сервера. Блокноты, страницы, рисунки, изображения, файлы и
+          фон приложения сохраняются прямо на устройстве.
         </p>
         <div className="hero-block__actions">
           <Button onClick={() => setIsCreateOpen(true)}>Создать</Button>
@@ -140,23 +151,36 @@ export function NotebooksPage() {
             Настроить фон приложения
           </Button>
         </div>
+        <div className="search-toolbar">
+          <input
+            className="input search-toolbar__input"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Поиск блокнота по названию"
+          />
+          <div className="search-toolbar__meta">
+            {searchQuery.trim() ? `Найдено: ${filteredNotebooks.length}` : `Всего: ${notebooks.length}`}
+          </div>
+        </div>
         {backgroundUploadError ? <div className="inline-notice inline-notice--warning">{backgroundUploadError}</div> : null}
       </header>
 
       <div className="screen-caption">
-        <span>{notebooks.length} блокнотов</span>
+        <span>{filteredNotebooks.length} блокнотов</span>
         <span>Фон: {settings.backgroundMode === "custom" ? "Своя картинка" : backgroundPreset.label}</span>
       </div>
 
       <section className="notebooks-gallery panel">
         <div className="grid grid--notebooks">
-          {!isBusy && notebooks.length === 0 ? (
+          {!isBusy && filteredNotebooks.length === 0 ? (
             <div className="empty-state empty-state--wide">
-              Пока здесь пусто. Создайте первый блокнот и задайте ему свой характер.
+              {searchQuery.trim()
+                ? "По этому запросу ничего не найдено. Попробуйте другое название."
+                : "Пока здесь пусто. Создайте первый блокнот и задайте ему свой характер."}
             </div>
           ) : null}
 
-          {notebooks.map((notebook) => (
+          {filteredNotebooks.map((notebook) => (
             <NotebookCard
               key={notebook.id}
               notebook={notebook}
@@ -164,7 +188,7 @@ export function NotebooksPage() {
               isDeleting={deletingNotebookId === notebook.id}
               deleteOffset={deletingNotebookId === notebook.id ? deleteOffset : undefined}
               deleteDragOffset={deletingNotebookId === notebook.id ? deleteDragOffset : undefined}
-              onOpen={(notebookId) => navigate(`/notebooks/${notebookId}`)}
+              onOpen={(targetNotebookId) => navigate(`/notebooks/${targetNotebookId}`)}
               onDragStart={handleNotebookDragStart}
               onDragMove={handleNotebookDragMove}
               onDragEnd={handleNotebookDragEnd}
@@ -173,7 +197,7 @@ export function NotebooksPage() {
         </div>
       </section>
 
-      {notebooks.length > 0 ? (
+      {filteredNotebooks.length > 0 ? (
         <div className="notebooks-screen__dock">
           <button
             ref={trashButtonRef}
