@@ -12,6 +12,7 @@ interface DrawingCanvasProps {
   strokeStyle: ToolStrokeStyle;
   smoothing: number;
   className?: string;
+  onChange?: (strokes: DrawingStroke[]) => void;
 }
 
 export interface DrawingCanvasHandle {
@@ -97,6 +98,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
     strokeStyle,
     smoothing,
     className,
+    onChange,
   },
   ref,
 ) {
@@ -284,6 +286,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
 
         if (activeStroke) {
           strokesRef.current = [...strokesRef.current, activeStroke];
+          onChange?.([...strokesRef.current]);
         }
 
         activeStrokeRef.current = null;
@@ -298,7 +301,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandle, DrawingCanvasProps>
         return [...strokesRef.current];
       },
     }),
-    [color, opacity, smoothing, strokeStyle, strokeWidth, toolId],
+    [color, onChange, opacity, smoothing, strokeStyle, strokeWidth, toolId],
   );
 
   return (

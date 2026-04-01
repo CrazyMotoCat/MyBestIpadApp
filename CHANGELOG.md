@@ -30,6 +30,32 @@
 - проект ушёл от уровня «стартовый шаблон» к более цельной локальной продуктовой базе;
 - данные, пресеты и конфигурации вынесены из UI в отдельные типы, конфиги и shared-слой;
 - архитектура сохранена модульной: `app`, `features`, `shared/config`, `shared/lib`, `shared/types`, `shared/ui`.
+- начат этап `v1.1 — Editor Foundation`: редактор переходит к единой модели активного объекта;
+- выбор media/shape/text объекта теперь заметнее отделён от page flip и создания нового текстового блока на листе;
+- режимы выбора объекта и редактирования текста стали чище пересекаться между собой внутри редактора.
+- текстовые блоки начали вести себя ближе к другим page-объектам: состояние «блок выбран» теперь отделяется от состояния «печатаю внутри блока».
+- текстовые блоки жёстче встроены в общую overlay-модель редактора: drag/resize больше не должны конфликтовать с созданием нового текста на листе.
+- внутри редактора появился более общий selection lifecycle для page-объектов: text/media/shape чаще проходят через одинаковые helpers выбора и снятия выбора.
+- `shape/image/file` начали использовать более единый commit/delete path в editor shell, что уменьшает ручной разнобой между типами page-элементов.
+- текстовые блоки тоже переведены на более явный `commit/delete` path, чтобы завершение drag/edit/delete меньше зависело от отдельных ручных веток логики.
+- часть editor interaction state вынесена из `PageEditorPage` в отдельный helper-layer, чтобы selection и базовые коллекционные операции меньше жили прямо внутри экранного компонента.
+- повторяющиеся transform-утилиты вынесены в общий editor-lib слой и теперь используются в screen/media/shape частях редактора вместо нескольких локальных копий.
+- long-press и pointer-capture часть transform lifecycle для `media` и `shape` тоже начала использовать общий helper-layer вместо двух почти одинаковых локальных реализаций.
+- `finish interaction` для object layers тоже начал проходить через общий helper, так что media и shape меньше дублируют commit/delete завершение drag-сценариев.
+- текстовые блоки тоже переведены на тот же общий `finish interaction` helper-path, так что text перестаёт выбиваться из общего drag/resize finish flow редактора.
+- `media` и `shape` начали использовать общий draft-collection hook для временного interaction-state, вместо отдельных локальных схем `state + ref + resync`.
+- `media` и `shape` теперь используют и общий transform-controller hook, поэтому их long-press / drag / resize / finish lifecycle уже сведён к одной модели, а не двум параллельным реализациям.
+- в `PageEditorPage` появился более явный слой derived interaction-guards, чтобы page flip, создание нового текста и object interactions опирались на более единые правила;
+- закрыт special-case `Pencil` поверх текстового блока: рисование больше не должно упираться в overlay-guard текстового элемента.
+
+- transform lifecycle текстовых блоков начал выноситься в отдельный `useTextTransformController`, при этом keyboard/focus orchestration сознательно остаётся в `PageEditorPage`, чтобы не ломать iPad Safari input flow.
+
+- transform lifecycle С‚РµРєСЃС‚РѕРІС‹С… Р±Р»РѕРєРѕРІ РЅР°С‡Р°Р» Р¶РёС‚СЊ РІ РѕС‚РґРµР»СЊРЅРѕРј `useTextTransformController`, РїСЂРё СЌС‚РѕРј keyboard/focus orchestration РѕСЃС‚Р°С‘С‚СЃСЏ РІ `PageEditorPage`, С‡С‚РѕР±С‹ РЅРµ Р»РѕРјР°С‚СЊ iPad focus timing.
+
+- sheet-level text guards стали явнее: keyboard entry и drawing routing теперь проходят через отдельные helper-правила, чтобы text input и text transform меньше конфликтовали внутри `PageEditorPage`.
+- для page shell и text blocks добавлен лёгкий session-level recovery draft: при незавершённых изменениях редактор может восстановить заголовок, бумагу, layout и текстовые блоки после перезагрузки вкладки, не залезая в более тяжёлый offline/quota слой `v1.2`.
+
+- РµС‰С‘ РѕРґРёРЅ recovery-слой РґРѕР±Р°РІР»РµРЅ РґР»СЏ drawing draft: РєРѕСЂРѕС‚РєРёРµ РІРЅСѓС‚СЂРµРЅРЅРёРµ С€С‚СЂРёС…Рё С‚РµРїРµСЂСЊ РјРѕРіСѓС‚ РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°С‚СЊСЃСЏ РёР· sessionStorage РїРѕСЃР»Рµ reload/pagehide, РїРѕРєР° РѕРЅРё РµС‰С‘ РЅРµ СѓС€Р»Рё РІ СЏРІРЅРѕРµ СЃРѕС…СЂР°РЅРµРЅРёРµ.
 
 ### Notes
 - Текущая версия ещё не считается финальным продуктом.
