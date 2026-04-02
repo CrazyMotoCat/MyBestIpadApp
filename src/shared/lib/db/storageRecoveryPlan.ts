@@ -1,5 +1,6 @@
 import { PageRecoveryDraftDiagnostics } from "@/features/editor/lib/pageRecoveryDraftDiagnostics";
 import { StorageHealthSummary } from "@/shared/lib/db/storageHealth";
+import { StorageIntegrityReport } from "@/shared/lib/db/storageIntegrity";
 import { StorageInsightsSummary } from "@/shared/lib/db/storageInsights";
 
 export interface StorageRecoveryPlan {
@@ -7,11 +8,13 @@ export interface StorageRecoveryPlan {
   primaryNotebookId: string | null;
   shouldOpenHome: boolean;
   shouldClearDrafts: boolean;
+  shouldRepairStorage: boolean;
 }
 
 interface BuildStorageRecoveryPlanInput {
   storageTone: "neutral" | "safe" | "warning" | "danger";
   storageInsights: StorageInsightsSummary | null;
+  storageIntegrity: StorageIntegrityReport | null;
   storageHealth: StorageHealthSummary | null;
   draftDiagnostics: PageRecoveryDraftDiagnostics | null;
 }
@@ -19,6 +22,7 @@ interface BuildStorageRecoveryPlanInput {
 export function buildStorageRecoveryPlan({
   storageTone,
   storageInsights,
+  storageIntegrity,
   storageHealth,
   draftDiagnostics,
 }: BuildStorageRecoveryPlanInput): StorageRecoveryPlan {
@@ -28,6 +32,7 @@ export function buildStorageRecoveryPlan({
       primaryNotebookId: null,
       shouldOpenHome: false,
       shouldClearDrafts: false,
+      shouldRepairStorage: false,
     };
   }
 
@@ -44,6 +49,17 @@ export function buildStorageRecoveryPlan({
 
   if ((storageInsights?.appBackgroundBytes ?? 0) > 0) {
     steps.push("Если нужен быстрый выигрыш по месту, начните с замены пользовательского фона на более лёгкий preset.");
+  }
+
+  const hasRepairTargets =
+    (storageIntegrity?.orphanAssetIds.length ?? 0) > 0 ||
+    (storageIntegrity?.danglingNotebookAttachmentIds.length ?? 0) > 0 ||
+    (storageIntegrity?.danglingPageElementIds.length ?? 0) > 0 ||
+    (storageIntegrity?.missingCoverNotebookIds.length ?? 0) > 0 ||
+    Boolean(storageIntegrity?.missingBackgroundAsset);
+
+  if ((storageInsights?.unassignedAssetBytes ?? 0) > 0 || hasRepairTargets) {
+    steps.push("Если в диагностике остались orphan assets или сломанные локальные ссылки, запустите safe repair прямо из панели статуса.");
   }
 
   if ((draftDiagnostics?.totalEntries ?? 0) > 0) {
@@ -65,5 +81,6 @@ export function buildStorageRecoveryPlan({
     primaryNotebookId: primaryNotebook?.notebookId ?? null,
     shouldOpenHome: (storageInsights?.appBackgroundBytes ?? 0) > 0,
     shouldClearDrafts: (draftDiagnostics?.totalEntries ?? 0) > 0,
+    shouldRepairStorage: hasRepairTargets || (storageInsights?.unassignedAssetBytes ?? 0) > 0,
   };
 }

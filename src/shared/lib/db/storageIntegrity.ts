@@ -22,6 +22,8 @@ export interface StorageIntegrityReport {
 
 export interface StorageRepairResult {
   deletedAssets: number;
+  deletedNotebookAttachments: number;
+  deletedPageElements: number;
   unresolvedNotebookAttachments: number;
   unresolvedPageElements: number;
   resetNotebookCovers: number;
@@ -106,10 +108,18 @@ export async function repairStorageIntegrity(): Promise<StorageRepairResult> {
     db.get("appSettings", "app-settings"),
   ]);
 
-  const transaction = db.transaction(["assets", "notebooks", "appSettings"], "readwrite");
+  const transaction = db.transaction(["assets", "notebookAttachments", "notebooks", "pageElements", "appSettings"], "readwrite");
 
   for (const assetId of report.orphanAssetIds) {
     await transaction.objectStore("assets").delete(assetId);
+  }
+
+  for (const attachmentId of report.danglingNotebookAttachmentIds) {
+    await transaction.objectStore("notebookAttachments").delete(attachmentId);
+  }
+
+  for (const elementId of report.danglingPageElementIds) {
+    await transaction.objectStore("pageElements").delete(elementId);
   }
 
   for (const notebook of notebooks) {
@@ -139,15 +149,17 @@ export async function repairStorageIntegrity(): Promise<StorageRepairResult> {
 
     const result = {
       deletedAssets: report.orphanAssetIds.length,
-      unresolvedNotebookAttachments: report.danglingNotebookAttachmentIds.length,
-      unresolvedPageElements: report.danglingPageElementIds.length,
+      deletedNotebookAttachments: report.danglingNotebookAttachmentIds.length,
+      deletedPageElements: report.danglingPageElementIds.length,
+      unresolvedNotebookAttachments: 0,
+      unresolvedPageElements: 0,
       resetNotebookCovers: report.missingCoverNotebookIds.length,
       resetBackgroundLink: report.missingBackgroundAsset,
     };
 
     recordStorageWriteSuccess(
       "repair storage integrity",
-      `Починены локальные ссылки: assets ${result.deletedAssets}, обложки ${result.resetNotebookCovers}.`,
+      `Починены локальные ссылки: assets ${result.deletedAssets}, notebook attachments ${result.deletedNotebookAttachments}, page elements ${result.deletedPageElements}, обложки ${result.resetNotebookCovers}.`,
     );
 
     return result;

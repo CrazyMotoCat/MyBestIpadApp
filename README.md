@@ -43,7 +43,7 @@ Sprint 1 по offline launch hardening завершён.
 Что уже закрыто в этом слое:
 - quota-aware preflight для тяжёлых изображений, файлов, обложек и фона;
 - storage/quota diagnostics, storage health summary и backup import/export в `PWA статус`;
-- cleanup/repair path для локальных links и stale recovery drafts;
+- cleanup/repair path для локальных links, orphan assets и stale recovery drafts;
 - явный recovery plan для blob-heavy quota-pressure сценариев;
 - зафиксированные версии зависимостей вместо `latest`;
 - отдельный smoke-check для ручной проверки storage/quota/recovery сценариев.
@@ -113,7 +113,7 @@ npm run build
 Пока ещё требуют внимания:
 - лимиты `iPad Safari` по storage/quota;
 - blob-heavy сценарии с изображениями, файлами, фонами и обложками;
-- полное выравнивание editor interaction model для всех типов page-элементов;
+- остаточный iPad-specific keyboard/focus orchestration в `PageEditorPage`, который всё ещё стоит дальше выносить из screen-shell аккуратными шагами;
 - расширение regression coverage на критичные пользовательские сценарии.
 
 ## Не входит в ближайший scope

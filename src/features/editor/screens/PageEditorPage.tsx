@@ -54,6 +54,7 @@ import { DrawingPoint, DrawingStroke, FileAttachmentPageElement, ImagePageElemen
 import { PaperPresetId, ToolPresetId, ToolStrokeStyle } from "@/shared/types/presets";
 import { createId } from "@/shared/lib/utils/id";
 import { Button } from "@/shared/ui/Button";
+import { useConfirm } from "@/shared/ui/ConfirmProvider";
 import { Panel } from "@/shared/ui/Panel";
 
 const layoutOptions: { label: string; value: PageLayout }[] = [
@@ -176,6 +177,7 @@ function serializeStrokeDraft(strokes: DrawingStroke[]) {
 }
 
 export function PageEditorPage() {
+  const confirm = useConfirm();
   const { pageId } = useParams();
   const navigate = useNavigate();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -778,7 +780,11 @@ export function PageEditorPage() {
     if (
       preflight.level === "warning" &&
       preflight.message &&
-      !window.confirm(`${preflight.message}\n\nПродолжить добавление изображений?`)
+      !(await confirm({
+        title: "Добавить изображения?",
+        message: `${preflight.message}\n\nПродолжить добавление изображений?`,
+        confirmText: "Добавить",
+      }))
     ) {
       setAssetStorageError(preflight.message);
       event.target.value = "";
@@ -817,7 +823,11 @@ export function PageEditorPage() {
     if (
       preflight.level === "warning" &&
       preflight.message &&
-      !window.confirm(`${preflight.message}\n\nПродолжить добавление файлов?`)
+      !(await confirm({
+        title: "Добавить файлы?",
+        message: `${preflight.message}\n\nПродолжить добавление файлов?`,
+        confirmText: "Добавить",
+      }))
     ) {
       setAssetStorageError(preflight.message);
       event.target.value = "";

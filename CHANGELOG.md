@@ -27,6 +27,7 @@
 - issue templates и PR template.
 
 ### Changed
+- `PWA статус` now exposes a direct repair action for orphan/unassigned local assets in both the recovery plan and the storage breakdown, so every heavy cleanup target in quota diagnostics has a one-tap path.
 - editor foundation acceptance tail закрыт как отдельный Sprint 3 hardening-слой: page objects получили явный editor-lib contract, `text` теперь проходит через тот же transform/finish-interaction vocabulary, что и `image/file/shape`, а `PageEditorPage` меньше держит lifecycle в специальных ветках;
 - persistence вокруг страницы стала наблюдаемее: статус теперь различает `loading`, `dirty`, `saving`, `saved`, `restoring`, `conflicted` и `failed` вместо одной размытой строки про черновик;
 - regression safety net для Sprint 3 усилен: добавлен browser e2e happy-path на создание блокнота, вход в редактор, ввод текста, сохранение и восстановление после reload;

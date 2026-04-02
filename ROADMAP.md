@@ -323,9 +323,9 @@ Roadmap можно считать успешным, если проект при
 - current v1.2 follow-up: heavy backup export/import should preflight size and quota risk before Safari starts a large JSON/base64 roundtrip, so recovery paths fail early and clearly instead of dying mid-operation.
 - current v1.2 follow-up: user-facing storage errors should stay readable and scenario-specific for backup, background, cover, image and file flows, especially under iPad Safari quota pressure.
 - current v1.2 step: all major local upload entry points should perform quota-aware preflight before starting image/file/background/cover writes, not only after IndexedDB throws.
-- current v1.2 follow-up: after upload preflight is in place, the next storage-quality pass should focus on stronger recovery for the heaviest attachment scenarios and more explicit cleanup guidance under Safari pressure.
-- current v1.2 step: storage diagnostics should point to actual cleanup targets (heavy notebooks/background assets), not only generic quota percentages.
-- current v1.2 follow-up: storage diagnostics should also offer direct cleanup/navigation actions, so users can move from quota warning to a concrete notebook/background cleanup path in one tap.
+- current v1.2 delivered: after upload preflight, the storage-quality pass now includes stronger recovery guidance for the heaviest attachment scenarios under Safari pressure.
+- current v1.2 delivered: storage diagnostics now point to actual cleanup targets (heavy notebooks/background assets/orphan leftovers), not only generic quota percentages.
+- current v1.2 delivered: storage diagnostics now offer direct cleanup/navigation actions, so users can move from quota warning to a concrete notebook/background/orphan cleanup path in one tap.
 - current v1.2 step: integrity repair should safely clean orphan blobs and broken singleton links without silently deleting user content that still needs manual review.
 - current v1.2 follow-up: keep growing a small automated safety net around storage/offline helpers while the project is still local-first and schema-light.
 - current v1.2 step: offline readiness should be computed by one shared gate across shell/status UI, so the app stops giving mixed signals about whether offline launch is actually safe.

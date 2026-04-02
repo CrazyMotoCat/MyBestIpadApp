@@ -15,6 +15,7 @@ import { buildPaperStyle } from "@/shared/lib/paper";
 import { useAssetObjectUrl } from "@/shared/lib/useAssetObjectUrl";
 import { Notebook, NotebookAttachment, Page } from "@/shared/types/models";
 import { Button } from "@/shared/ui/Button";
+import { useConfirm } from "@/shared/ui/ConfirmProvider";
 import { Panel } from "@/shared/ui/Panel";
 
 interface PageCardData extends Page {
@@ -31,6 +32,7 @@ function formatPageMeta(dateIso: string) {
 }
 
 export function NotebookPage() {
+  const confirm = useConfirm();
   const { notebookId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -135,7 +137,15 @@ export function NotebookPage() {
       return;
     }
 
-    if (preflight.level === "warning" && preflight.message && !window.confirm(`${preflight.message}\n\nПродолжить добавление файлов в блокнот?`)) {
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !(await confirm({
+        title: "Добавить файлы в блокнот?",
+        message: `${preflight.message}\n\nПродолжить добавление файлов в блокнот?`,
+        confirmText: "Добавить",
+      }))
+    ) {
       setAttachmentError(preflight.message);
       event.target.value = "";
       return;

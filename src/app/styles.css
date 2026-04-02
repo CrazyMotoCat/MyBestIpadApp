@@ -1829,6 +1829,24 @@ textarea {
   margin-bottom: 20px;
 }
 
+.confirm-dialog {
+  display: grid;
+  gap: 18px;
+}
+
+.confirm-dialog__message {
+  white-space: pre-line;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .binding {
   position: absolute;
   z-index: 4;

@@ -33,6 +33,7 @@ import {
   getPageRecoveryDraftDiagnostics,
   PageRecoveryDraftDiagnostics,
 } from "@/features/editor/lib/pageRecoveryDraftDiagnostics";
+import { useConfirm } from "@/shared/ui/ConfirmProvider";
 
 interface PwaStatusSnapshot {
   isOnline: boolean;
@@ -180,6 +181,7 @@ async function collectSnapshot(): Promise<PwaStatusSnapshot> {
 }
 
 export function PwaStatusBadge() {
+  const confirm = useConfirm();
   const [isOpen, setIsOpen] = useState(false);
   const [isRequestingPersistentStorage, setIsRequestingPersistentStorage] = useState(false);
   const [isExportingBackup, setIsExportingBackup] = useState(false);
@@ -323,6 +325,7 @@ export function PwaStatusBadge() {
   const storageRecoveryPlan = buildStorageRecoveryPlan({
     storageTone,
     storageInsights,
+    storageIntegrity,
     storageHealth,
     draftDiagnostics,
   });
@@ -358,9 +361,11 @@ export function PwaStatusBadge() {
 
       if (
         exportWarning &&
-        !window.confirm(
-          `${exportWarning}\n\nЭкспорт всё равно возможен, но на iPad Safari он может занять больше времени. Продолжить?`,
-        )
+        !(await confirm({
+          title: "Экспортировать резервную копию?",
+          message: `${exportWarning}\n\nЭкспорт всё равно возможен, но на iPad Safari он может занять больше времени.`,
+          confirmText: "Экспортировать",
+        }))
       ) {
         return;
       }
@@ -388,13 +393,15 @@ export function PwaStatusBadge() {
     try {
       const importWarning = await getBackupImportWarning(file);
 
-      if (
-        !window.confirm(
-          importWarning
-            ? `${importWarning}\n\nИмпорт заменит текущую локальную базу на содержимое backup-файла. Продолжить?`
-            : "Импорт заменит текущую локальную базу на содержимое backup-файла. Продолжить?",
-        )
-      ) {
+      const shouldContinue = await confirm({
+        title: "Импортировать резервную копию?",
+        message: importWarning
+          ? `${importWarning}\n\nИмпорт заменит текущую локальную базу на содержимое backup-файла.`
+          : "Импорт заменит текущую локальную базу на содержимое backup-файла.",
+        confirmText: "Импортировать",
+      });
+
+      if (!shouldContinue) {
         return;
       }
 
@@ -416,11 +423,14 @@ export function PwaStatusBadge() {
   }
 
   async function handleRepairStorage() {
-    if (
-      !window.confirm(
-        "Приложение попробует очистить битые локальные ссылки: orphan assets, пустые attachment-связи и сломанные ссылки на обложки/фон. Продолжить?",
-      )
-    ) {
+    const shouldContinue = await confirm({
+      title: "Запустить safe repair?",
+      message:
+        "Приложение попробует очистить битые локальные ссылки: orphan assets, пустые attachment-связи, битые page-элементы и сломанные ссылки на обложки/фон.",
+      confirmText: "Запустить repair",
+    });
+
+    if (!shouldContinue) {
       return;
     }
 
@@ -429,7 +439,7 @@ export function PwaStatusBadge() {
       const result = await repairStorageIntegrity();
       await refresh();
       setBackupMessage(
-        `Локальное хранилище проверено: удалено orphan assets ${result.deletedAssets}, сброшено обложек ${result.resetNotebookCovers}. Битых attachment-связей осталось ${result.unresolvedNotebookAttachments}, page-элементов ${result.unresolvedPageElements}.`,
+        `Локальное хранилище проверено: удалено orphan assets ${result.deletedAssets}, notebook attachments ${result.deletedNotebookAttachments}, page elements ${result.deletedPageElements}, сброшено обложек ${result.resetNotebookCovers}.`,
       );
     } catch (error) {
       console.error("Storage repair failed", error);
@@ -441,11 +451,13 @@ export function PwaStatusBadge() {
   }
 
   async function handleClearDrafts() {
-    if (
-      !window.confirm(
-        "Приложение очистит pending recovery drafts и snapshot-черновики страницы из sessionStorage/localStorage. Продолжить?",
-      )
-    ) {
+    const shouldContinue = await confirm({
+      title: "Очистить recovery drafts?",
+      message: "Приложение очистит pending recovery drafts и snapshot-черновики страницы из sessionStorage/localStorage.",
+      confirmText: "Очистить",
+    });
+
+    if (!shouldContinue) {
       return;
     }
 
@@ -686,6 +698,16 @@ export function PwaStatusBadge() {
                     {isClearingDrafts ? "Очищаем черновики..." : "Очистить stale drafts"}
                   </button>
                 ) : null}
+                {storageRecoveryPlan.shouldRepairStorage ? (
+                  <button
+                    type="button"
+                    className="pwa-status__action-button"
+                    onClick={() => void handleRepairStorage()}
+                    disabled={isRepairingStorage}
+                  >
+                    {isRepairingStorage ? "Чиним..." : "Запустить safe repair"}
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -817,8 +839,24 @@ export function PwaStatusBadge() {
                 </div>
               ) : null}
               {storageInsights.unassignedAssetBytes > 0 ? (
-                <div className="pwa-status__cleanup-meta">
-                  Прочие локальные assets: {formatStorageBytes(storageInsights.unassignedAssetBytes)}
+                <div className="pwa-status__cleanup-item">
+                  <div className="pwa-status__cleanup-head">
+                    <strong>Прочие локальные assets</strong>
+                    <span>{formatStorageBytes(storageInsights.unassignedAssetBytes)}</span>
+                  </div>
+                  <div className="pwa-status__cleanup-meta">
+                    Обычно это orphan assets или остатки сломанных локальных ссылок, которые уже не привязаны к блокноту или странице.
+                  </div>
+                  <div className="pwa-status__cleanup-actions">
+                    <button
+                      type="button"
+                      className="pwa-status__inline-button"
+                      onClick={() => void handleRepairStorage()}
+                      disabled={isRepairingStorage}
+                    >
+                      {isRepairingStorage ? "Чиним..." : "Починить orphan assets"}
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </div>

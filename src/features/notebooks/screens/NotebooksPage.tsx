@@ -12,12 +12,14 @@ import { getAssetUploadPreflight } from "@/shared/lib/db/storagePreflight";
 import { Notebook } from "@/shared/types/models";
 import { Button } from "@/shared/ui/Button";
 import { AppShellContextValue } from "@/shared/ui/AppShell";
+import { useConfirm } from "@/shared/ui/ConfirmProvider";
 
 interface NotebookCardData extends Notebook {
   pagesCount: number;
 }
 
 export function NotebooksPage() {
+  const confirm = useConfirm();
   const navigate = useNavigate();
   const { settings, updateBackground, uploadBackground, updateBackgroundDim, updateBackgroundBlur } =
     useOutletContext<AppShellContextValue>();
@@ -74,6 +76,37 @@ export function NotebooksPage() {
 
   function getTrashBounds() {
     return trashButtonRef.current?.getBoundingClientRect() ?? null;
+  }
+
+  async function handleBackgroundUpload(file: File) {
+    const preflight = getAssetUploadPreflight(file, "Фон приложения");
+
+    if (preflight.level === "blocked") {
+      setBackgroundUploadError(preflight.message);
+      return;
+    }
+
+    if (
+      preflight.level === "warning" &&
+      preflight.message &&
+      !(await confirm({
+        title: "Загрузить фон приложения?",
+        message: `${preflight.message}\n\nПродолжить загрузку фона?`,
+        confirmText: "Загрузить",
+      }))
+    ) {
+      setBackgroundUploadError(preflight.message);
+      return;
+    }
+
+    void uploadBackground(file)
+      .then(() => {
+        setBackgroundUploadError(null);
+      })
+      .catch((error) => {
+        console.error("Background upload failed", error);
+        setBackgroundUploadError(getStorageRecoveryMessage(error, "фон приложения"));
+      });
   }
 
   function isPointInsideTrash(point: { x: number; y: number }) {
@@ -233,30 +266,7 @@ export function NotebooksPage() {
           void updateBackground(backgroundId);
         }}
         onUpload={(file) => {
-          const preflight = getAssetUploadPreflight(file, "Фон приложения");
-
-          if (preflight.level === "blocked") {
-            setBackgroundUploadError(preflight.message);
-            return;
-          }
-
-          if (
-            preflight.level === "warning" &&
-            preflight.message &&
-            !window.confirm(`${preflight.message}\n\nПродолжить загрузку фона?`)
-          ) {
-            setBackgroundUploadError(preflight.message);
-            return;
-          }
-
-          void uploadBackground(file)
-            .then(() => {
-              setBackgroundUploadError(null);
-            })
-            .catch((error) => {
-              console.error("Background upload failed", error);
-              setBackgroundUploadError(getStorageRecoveryMessage(error, "фон приложения"));
-            });
+          void handleBackgroundUpload(file);
         }}
         onDimChange={(dimAmount) => {
           void updateBackgroundDim(dimAmount);

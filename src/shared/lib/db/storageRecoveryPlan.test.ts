@@ -7,6 +7,7 @@ describe("buildStorageRecoveryPlan", () => {
       buildStorageRecoveryPlan({
         storageTone: "safe",
         storageInsights: null,
+        storageIntegrity: null,
         storageHealth: null,
         draftDiagnostics: null,
       }),
@@ -15,10 +16,11 @@ describe("buildStorageRecoveryPlan", () => {
       primaryNotebookId: null,
       shouldOpenHome: false,
       shouldClearDrafts: false,
+      shouldRepairStorage: false,
     });
   });
 
-  it("prioritizes heaviest notebook, background cleanup and draft cleanup under warning pressure", () => {
+  it("prioritizes heaviest notebook, background cleanup, repair and draft cleanup under warning pressure", () => {
     const plan = buildStorageRecoveryPlan({
       storageTone: "warning",
       storageInsights: {
@@ -38,6 +40,14 @@ describe("buildStorageRecoveryPlan", () => {
         appBackgroundBytes: 12,
         unassignedAssetBytes: 0,
         totalTrackedAssetBytes: 37,
+      },
+      storageIntegrity: {
+        orphanAssetIds: ["asset-1"],
+        orphanAssetBytes: 3,
+        danglingNotebookAttachmentIds: [],
+        danglingPageElementIds: [],
+        missingCoverNotebookIds: [],
+        missingBackgroundAsset: false,
       },
       storageHealth: null,
       draftDiagnostics: {
@@ -60,8 +70,10 @@ describe("buildStorageRecoveryPlan", () => {
     expect(plan.primaryNotebookId).toBe("notebook-1");
     expect(plan.shouldOpenHome).toBe(true);
     expect(plan.shouldClearDrafts).toBe(true);
+    expect(plan.shouldRepairStorage).toBe(true);
     expect(plan.steps.join(" ")).toContain("Тяжёлый блокнот");
     expect(plan.steps.join(" ")).toContain("пользовательского фона");
+    expect(plan.steps.join(" ")).toContain("safe repair");
     expect(plan.steps.join(" ")).toContain("stale recovery drafts");
   });
 
@@ -74,6 +86,7 @@ describe("buildStorageRecoveryPlan", () => {
         unassignedAssetBytes: 0,
         totalTrackedAssetBytes: 0,
       },
+      storageIntegrity: null,
       storageHealth: {
         tone: "warning",
         title: "Хранилище под риском",
@@ -97,5 +110,6 @@ describe("buildStorageRecoveryPlan", () => {
 
     expect(plan.steps.join(" ")).toContain("save asset");
     expect(plan.steps.join(" ")).toContain("не добавляйте новые крупные");
+    expect(plan.shouldRepairStorage).toBe(false);
   });
 });

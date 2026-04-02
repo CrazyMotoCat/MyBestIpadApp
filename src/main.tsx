@@ -4,12 +4,14 @@ import { RouterProvider } from "react-router-dom";
 import { router } from "@/app/router";
 import "@/app/styles.css";
 import { registerServiceWorker } from "@/shared/lib/pwa/registerServiceWorker";
+import { ConfirmProvider } from "@/shared/ui/ConfirmProvider";
 
 registerServiceWorker();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <ConfirmProvider>
+      <RouterProvider router={router} />
+    </ConfirmProvider>
   </React.StrictMode>,
 );
-

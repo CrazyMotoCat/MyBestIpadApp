@@ -20,6 +20,7 @@ import {
   ToolPresetId,
 } from "@/shared/types/presets";
 import { Button } from "@/shared/ui/Button";
+import { useConfirm } from "@/shared/ui/ConfirmProvider";
 import { Modal } from "@/shared/ui/Modal";
 
 interface NotebookFormState {
@@ -87,6 +88,7 @@ export function CreateNotebookModal({
   submitText = "Создать",
   closeDelayMs = 0,
 }: CreateNotebookModalProps) {
+  const confirm = useConfirm();
   const [form, setForm] = useState<NotebookFormState>(buildInitialState(initialValues));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customCoverUrl, setCustomCoverUrl] = useState<string | null>(null);
@@ -170,7 +172,7 @@ export function CreateNotebookModal({
     }
   }
 
-  function handleCoverImageChange(event: ChangeEvent<HTMLInputElement>) {
+  async function handleCoverImageChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
 
     if (!file) {
@@ -190,7 +192,11 @@ export function CreateNotebookModal({
     if (
       preflight.level === "warning" &&
       preflight.message &&
-      !window.confirm(`${preflight.message}\n\nПродолжить с этой обложкой?`)
+      !(await confirm({
+        title: "Использовать эту обложку?",
+        message: `${preflight.message}\n\nПродолжить с этой обложкой?`,
+        confirmText: "Продолжить",
+      }))
     ) {
       setCoverNotice(preflight.message);
       event.target.value = "";
@@ -378,7 +384,13 @@ export function CreateNotebookModal({
 
             <label className="upload-box">
               <span>Или загрузите свою обложку</span>
-              <input type="file" accept="image/*" onChange={handleCoverImageChange} />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  void handleCoverImageChange(event);
+                }}
+              />
             </label>
 
             <div className="muted">
