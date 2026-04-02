@@ -2249,6 +2249,14 @@ textarea {
   box-shadow: none;
 }
 
+.editor-sheet__status-pill--warning {
+  border-color: rgba(255, 216, 120, 0.26);
+  background:
+    linear-gradient(180deg, rgba(56, 42, 14, 0.56), rgba(30, 22, 8, 0.34)),
+    rgba(255, 216, 120, 0.1);
+  color: #ffe7aa;
+}
+
 .editor-sheet__status-pill--error {
   border-color: rgba(255, 122, 122, 0.3);
   background:

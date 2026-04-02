@@ -27,6 +27,10 @@
 - issue templates и PR template.
 
 ### Changed
+- editor foundation acceptance tail закрыт как отдельный Sprint 3 hardening-слой: page objects получили явный editor-lib contract, `text` теперь проходит через тот же transform/finish-interaction vocabulary, что и `image/file/shape`, а `PageEditorPage` меньше держит lifecycle в специальных ветках;
+- persistence вокруг страницы стала наблюдаемее: статус теперь различает `loading`, `dirty`, `saving`, `saved`, `restoring`, `conflicted` и `failed` вместо одной размытой строки про черновик;
+- regression safety net для Sprint 3 усилен: добавлен browser e2e happy-path на создание блокнота, вход в редактор, ввод текста, сохранение и восстановление после reload;
+- quality gate доведён до явного acceptance-пакета: CI запускает `npm run test:e2e`, а для ручной проверки есть отдельный `SPRINT_3_SMOKE_PACK.md`;
 - начат `v1.3 — Notebook Power Features`: на главном экране, экране блокнота и в панели закладок редактора появился локальный поиск, а список страниц блока получил быстрый `page strip` с мини-метаданными для перехода между недавними листами;
 - проект ушёл от уровня «стартовый шаблон» к более цельной локальной продуктовой базе;
 - данные, пресеты и конфигурации вынесены из UI в отдельные типы, конфиги и shared-слой;

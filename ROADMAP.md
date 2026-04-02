@@ -61,6 +61,8 @@ In progress now:
 - ещё один безопасный cleanup inside `v1.1`: page recovery/persistence helper-слой выносится из `PageEditorPage`, чтобы screen-shell меньше одновременно держал и interaction-логику, и сборку recovery draft objects.
 
 - ещё один маленький cleanup inside `v1.1`: page persistence orchestration постепенно сводится к более явным helper-path для recovery snapshot и update payload, чтобы `PageEditorPage` меньше вручную дублировал одну и ту же shell-state схему между autosave, manual save и recovery.
+- acceptance-хвост editor foundation тоже закрыт: page objects получили отдельный editor-lib contract, `text` дотянут до общего transform-controller vocabulary, а persistence статусы страницы теперь явны (`loading/dirty/saving/saved/restoring/conflicted/failed`).
+- quality-gate хвост того же слоя тоже закрыт: для editor flow есть browser e2e smoke и отдельный manual checklist `SPRINT_3_SMOKE_PACK.md`, так что regression-путь больше не держится только на ручной проверке экрана.
 
 ### v1.2 — Offline Reliability
 - усилить Service Worker и cache strategy;

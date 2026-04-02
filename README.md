@@ -48,6 +48,15 @@ Sprint 1 по offline launch hardening завершён.
 - зафиксированные версии зависимостей вместо `latest`;
 - отдельный smoke-check для ручной проверки storage/quota/recovery сценариев.
 
+`Sprint 3 / editor contract` на текущем baseline тоже можно считать закрытым как архитектурный hardening-слой.
+
+Что зафиксировано в этом слое:
+- для page objects появился явный editor-lib contract и общий vocabulary lifecycle;
+- `text` выровнен с `image/file/shape` по общему transform/finish interaction path;
+- persistence статусы страницы стали явными: `loading`, `dirty`, `saving`, `saved`, `restoring`, `conflicted`, `failed`;
+- критический editor happy-path теперь проверяется не только unit-слоем, но и browser e2e smoke;
+- для ручной приёмки появился отдельный `SPRINT_3_SMOKE_PACK.md`.
+
 Следующий рабочий фокус проекта: `v1.3 / Notebook Power Features`.
 
 ## Стек
@@ -79,6 +88,7 @@ npm run dev
 
 ```bash
 npm run test
+npm run test:e2e
 npm run check
 npm run build
 ```
@@ -120,4 +130,5 @@ npm run build
 - [CHANGELOG.md](/D:/Codex/MyBestIpadApp/CHANGELOG.md) — заметные изменения;
 - [SPRINT_1_SMOKE_PACK.md](/D:/Codex/MyBestIpadApp/SPRINT_1_SMOKE_PACK.md) — release smoke-check для Sprint 1;
 - [SPRINT_2_SMOKE_PACK.md](/D:/Codex/MyBestIpadApp/SPRINT_2_SMOKE_PACK.md) — storage/quota/recovery smoke-check для Sprint 2;
+- [SPRINT_3_SMOKE_PACK.md](/D:/Codex/MyBestIpadApp/SPRINT_3_SMOKE_PACK.md) — editor contract и quality-gates smoke-check для Sprint 3;
 - [PROJECT_SUMMARY.md](/D:/Codex/MyBestIpadApp/PROJECT_SUMMARY.md) — ранний проектный контекст и продуктовая рамка.

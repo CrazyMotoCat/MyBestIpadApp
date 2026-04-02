@@ -23,6 +23,13 @@ import { ShapeNoteLayer } from "@/features/editor/components/ShapeNoteLayer";
 import { ToolPresetPicker } from "@/features/editor/components/ToolPresetPicker";
 import { createEditorSelectionController, removeItemById, replaceItemById } from "@/features/editor/lib/interactionState";
 import {
+  getNextDirtyPersistenceStatus,
+  getPagePersistenceView,
+  getRecoveredPagePersistenceStatus,
+  PagePersistenceStatus,
+} from "@/features/editor/lib/pagePersistenceState";
+import { promotePageObject } from "@/features/editor/lib/pageObjectContract";
+import {
   clearPageDraftSnapshot,
   clearPageRecoveryDraft,
   createPageDraftSnapshot,
@@ -88,10 +95,6 @@ const TEXT_BLOCK_MIN_WIDTH = 180;
 const TEXT_BLOCK_MIN_HEIGHT = 84;
 const TEXT_BLOCK_DEFAULT_WIDTH = 280;
 const TEXT_BLOCK_MAX_WIDTH = 520;
-const SAVE_STATE_LOADING = "Загрузка";
-const SAVE_STATE_PENDING = "Черновик";
-const SAVE_STATE_SAVED = "Все изменения сохранены";
-const SAVE_STATE_ERROR = "Ошибка сохранения";
 const DEFAULT_DRAWING_COLOR = "#111111";
 const quickPaletteColors = [DEFAULT_DRAWING_COLOR, "#d7e8ff", "#f8fbff", "#9ed0ff", "#7fffd4", "#d5ff72", "#ffd7b8", "#ff9d8c", "#c9cbc7"];
 const PAGE_DRAFT_SYNC_DELAY_MS = 350;
@@ -224,7 +227,7 @@ export function PageEditorPage() {
   const [toolWidth, setToolWidth] = useState(2.2);
   const [toolOpacity, setToolOpacity] = useState(0.92);
   const [eraserWidth, setEraserWidth] = useState(16);
-  const [saveState, setSaveState] = useState(SAVE_STATE_LOADING);
+  const [persistenceStatus, setPersistenceStatus] = useState<PagePersistenceStatus>("loading");
   const [insertColor, setInsertColor] = useState("#fff1a6");
   const [insertPaperStyle, setInsertPaperStyle] = useState<PaperPresetId>("plain");
   const [insertEdgeStyle, setInsertEdgeStyle] = useState<ShapeNoteElement["edgeStyle"]>("straight");
@@ -256,6 +259,7 @@ export function PageEditorPage() {
   const paletteDialogLabel = activeKeyboardTextElement ? "Выбор цвета текста" : "Выбор цвета пера";
   const isPaletteDisabled = isEraserActive && !activeKeyboardTextElement;
   const hasActiveObjectSelection = Boolean(activeElementId || activeTextElementId);
+  const persistenceView = getPagePersistenceView(persistenceStatus);
   const { clearActiveObjectSelection, closeActiveTextEditing, releaseSelectionForElement, selectOverlayElement, selectTextElement } =
     createEditorSelectionController({
       activeTextElementId,
@@ -274,11 +278,17 @@ export function PageEditorPage() {
   const nextPageLabel = currentPageIndex >= 0 && currentPageIndex < pages.length - 1 ? "Следующая" : "Новый лист";
   const pageIndexLabel = currentPageIndex >= 0 ? `Лист ${currentPageIndex + 1} из ${pages.length}` : "Лист";
   const saveStateClassName =
-    saveState === SAVE_STATE_PENDING
+    persistenceView.tone === "quiet"
       ? "editor-sheet__status-pill--quiet"
-      : saveState === SAVE_STATE_ERROR
+      : persistenceView.tone === "warning"
+        ? "editor-sheet__status-pill--warning"
+        : persistenceView.tone === "error"
         ? "editor-sheet__status-pill--error"
         : "editor-sheet__status-pill--save";
+
+  function markPageDirty() {
+    setPersistenceStatus((current) => getNextDirtyPersistenceStatus(current));
+  }
 
   function buildPageDraftSnapshot(targetPageId: string, nextStrokes = draftStrokesRef.current): PageDraftSnapshot {
     return createPageDraftSnapshot({
@@ -443,7 +453,7 @@ export function PageEditorPage() {
         shapes: bundle.shapes,
       }),
     );
-    setSaveState(recoveryDraft || pageDraftSnapshot ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
+    setPersistenceStatus(getRecoveredPagePersistenceStatus(Boolean(recoveryDraft || pageDraftSnapshot)));
     setRecoveryNotice(nextRecoveryNotice);
     setStatus("ready");
     hydratedRef.current = true;
@@ -457,6 +467,8 @@ export function PageEditorPage() {
       return;
     }
 
+    const hasRecoveredDraft = Boolean(readPageDraftSnapshot(pageId) || readPageRecoveryDraft(pageId));
+    setPersistenceStatus(hasRecoveredDraft ? "restoring" : "loading");
     setStatus("loading");
     void loadPage(pageId);
   }, [pageId]);
@@ -576,6 +588,15 @@ export function PageEditorPage() {
       return;
     }
 
+    const currentSnapshot = serializePageRecoveryDraft(buildPageRecoveryDraftState(pageId));
+    const hasPendingPageChanges = persistedPageSnapshotRef.current !== currentSnapshot || hasPendingStrokeSaveRef.current;
+
+    if (!hasPendingPageChanges) {
+      return;
+    }
+
+    markPageDirty();
+
     if (saveTimeoutRef.current !== null) {
       window.clearTimeout(saveTimeoutRef.current);
     }
@@ -659,6 +680,7 @@ export function PageEditorPage() {
     }
 
     try {
+      setPersistenceStatus("saving");
       await updatePage(pageId, buildPersistPageInput());
       await replaceTextElements(pageId, textElements);
       if (includeDraftStrokes) {
@@ -689,11 +711,11 @@ export function PageEditorPage() {
       if (!hasPendingStrokeSaveRef.current) {
         clearPageDraftSnapshot(pageId);
       }
-      setSaveState(hasPendingStrokeSaveRef.current ? SAVE_STATE_PENDING : SAVE_STATE_SAVED);
+      setPersistenceStatus(hasPendingStrokeSaveRef.current ? "dirty" : "saved");
       setRecoveryNotice(null);
     } catch (error) {
       console.error("Save failed", error);
-      setSaveState(SAVE_STATE_ERROR);
+      setPersistenceStatus("failed");
     }
   }
 
@@ -711,6 +733,7 @@ export function PageEditorPage() {
     draftStrokesRef.current = [];
     hasPendingStrokeSaveRef.current = false;
     setRecoveryNotice(null);
+    setPersistenceStatus("restoring");
     hydratedRef.current = false;
     setStatus("loading");
     await loadPage(pageId);
@@ -718,7 +741,6 @@ export function PageEditorPage() {
 
   function handleManualSave() {
     syncDraftStrokesFromCanvas(true);
-    setSaveState((current) => (current === SAVE_STATE_ERROR ? current : SAVE_STATE_PENDING));
     void persistPageChanges({ includeDraftStrokes: true });
   }
 
@@ -736,6 +758,7 @@ export function PageEditorPage() {
     draftStrokesRef.current = nextStrokes;
     hasPendingStrokeSaveRef.current = true;
     setStrokes([...nextStrokes]);
+    markPageDirty();
   }
 
   async function handleImagesChange(event: ChangeEvent<HTMLInputElement>) {
@@ -836,23 +859,44 @@ export function PageEditorPage() {
   }
 
   function promoteShape(shape: ShapeNoteElement) {
-    const promotedShape = { ...shape, zIndex: zIndexCounterRef.current++ };
+    const fallbackShape = { ...shape, zIndex: zIndexCounterRef.current++ };
+    let promotedShape = fallbackShape;
+
+    setShapes((current) => {
+      const result = promotePageObject(current, shape.id, fallbackShape.zIndex);
+      promotedShape = result.promotedItem ?? fallbackShape;
+      return result.items;
+    });
+
     selectOverlayElement(promotedShape.id);
-    setShapes((current) => current.map((item) => (item.id === promotedShape.id ? promotedShape : item)));
     return promotedShape;
   }
 
   function promoteImage(image: ImagePageElement) {
-    const promotedImage = { ...image, zIndex: zIndexCounterRef.current++ };
+    const fallbackImage = { ...image, zIndex: zIndexCounterRef.current++ };
+    let promotedImage = fallbackImage;
+
+    setImages((current) => {
+      const result = promotePageObject(current, image.id, fallbackImage.zIndex);
+      promotedImage = result.promotedItem ?? fallbackImage;
+      return result.items;
+    });
+
     selectOverlayElement(promotedImage.id);
-    setImages((current) => current.map((item) => (item.id === promotedImage.id ? promotedImage : item)));
     return promotedImage;
   }
 
   function promoteFile(file: FileAttachmentPageElement) {
-    const promotedFile = { ...file, zIndex: zIndexCounterRef.current++ };
+    const fallbackFile = { ...file, zIndex: zIndexCounterRef.current++ };
+    let promotedFile = fallbackFile;
+
+    setFiles((current) => {
+      const result = promotePageObject(current, file.id, fallbackFile.zIndex);
+      promotedFile = result.promotedItem ?? fallbackFile;
+      return result.items;
+    });
+
     selectOverlayElement(promotedFile.id);
-    setFiles((current) => current.map((item) => (item.id === promotedFile.id ? promotedFile : item)));
     return promotedFile;
   }
 
@@ -1059,6 +1103,7 @@ export function PageEditorPage() {
     draftStrokesRef.current = [];
     hasPendingStrokeSaveRef.current = true;
     setStrokes([]);
+    markPageDirty();
   }
 
   async function handleDeleteCurrentPage() {
@@ -1473,19 +1518,11 @@ export function PageEditorPage() {
   function promoteTextElement(targetId: string) {
     let promotedElement: TextPageElement | null = null;
 
-    setTextElements((current) =>
-      current.map((item) => {
-        if (item.id !== targetId) {
-          return item;
-        }
-
-        promotedElement = {
-          ...item,
-          zIndex: zIndexCounterRef.current++,
-        };
-        return promotedElement;
-      }),
-    );
+    setTextElements((current) => {
+      const result = promotePageObject(current, targetId, zIndexCounterRef.current++);
+      promotedElement = result.promotedItem;
+      return result.items;
+    });
 
     return promotedElement;
   }
@@ -1922,7 +1959,7 @@ export function PageEditorPage() {
               <span>Цвет листа</span>
               <input className="color-input" type="color" value={paperColor} onChange={(event) => setPaperColor(event.target.value)} />
             </label>
-            <div className="editor-sidebar__hint editor-sidebar__hint--status">{saveState}</div>
+            <div className="editor-sidebar__hint editor-sidebar__hint--status">{persistenceView.label}</div>
           </div>
         );
       case "bookmarks":
@@ -1978,7 +2015,9 @@ export function PageEditorPage() {
           </Button>
         </div>
         <div className="editor-screen__status">
-          <span className={`editor-sheet__status-pill ${saveStateClassName}`}>{saveState}</span>
+          <span className={`editor-sheet__status-pill ${saveStateClassName}`} title={persistenceView.description}>
+            {persistenceView.label}
+          </span>
         </div>
       </div>
 

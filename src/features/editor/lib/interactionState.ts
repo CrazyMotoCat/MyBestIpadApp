@@ -1,4 +1,5 @@
 import { Dispatch, SetStateAction } from "react";
+import { removePageObjectById, replacePageObjectById } from "@/features/editor/lib/pageObjectContract";
 
 type FlipDirection = "" | "left" | "right";
 
@@ -15,13 +16,8 @@ interface SelectionControllerOptions {
   setSwipePreviewOffsetX: Dispatch<SetStateAction<number>>;
 }
 
-export function replaceItemById<T extends { id: string }>(items: T[], nextItem: T) {
-  return items.map((item) => (item.id === nextItem.id ? nextItem : item));
-}
-
-export function removeItemById<T extends { id: string }>(items: T[], targetId: string) {
-  return items.filter((item) => item.id !== targetId);
-}
+export const replaceItemById = replacePageObjectById;
+export const removeItemById = removePageObjectById;
 
 export function createEditorSelectionController({
   activeTextElementId,

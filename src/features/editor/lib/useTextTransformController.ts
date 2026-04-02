@@ -1,11 +1,11 @@
-import { Dispatch, PointerEvent as ReactPointerEvent, SetStateAction, useRef } from "react";
-import { finishDragInteraction, clampValue, isPointInBounds } from "@/features/editor/lib/transformUtils";
+import { Dispatch, PointerEvent as ReactPointerEvent, SetStateAction } from "react";
+import { clampValue, isPointInBounds } from "@/features/editor/lib/transformUtils";
+import { useObjectTransformController } from "@/features/editor/lib/useObjectTransformController";
 import { TextPageElement } from "@/shared/types/models";
 
 interface TextDragState {
   id: string;
   mode: "move" | "resize";
-  pointerId: number;
   startX: number;
   startY: number;
   originX: number;
@@ -47,117 +47,115 @@ export function useTextTransformController({
   setIsTrashHover,
   setTextElements,
 }: UseTextTransformControllerOptions) {
-  const dragRef = useRef<TextDragState | null>(null);
+  function getItemOrStop(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    const targetElement = getTextElement(targetId);
 
-  function resetDragState() {
-    dragRef.current = null;
-    setIsObjectDragging(false);
-    setIsTrashHover(false);
-  }
+    if (!targetElement) {
+      return null;
+    }
 
-  function beginTextTransform(targetId: string, mode: "move" | "resize", event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
+    return targetElement;
+  }
 
+  const { beginResize, finishInteraction, handleMove, handlePressStart } = useObjectTransformController<
+    TextPageElement,
+    TextDragState
+  >({
+    activateItem: (item) => {
+      closeActiveTextEditing();
+      selectTextElement(item.id);
+      return promoteTextElement(item.id) ?? item;
+    },
+    createDragState: (item, mode, clientX, clientY) => ({
+      id: item.id,
+      mode,
+      startX: clientX,
+      startY: clientY,
+      originX: item.x,
+      originY: item.y,
+      originWidth: item.width,
+      originHeight: item.height,
+    }),
+    getFinalItem: (itemId) => getTextElement(itemId),
+    getTrashBounds,
+    onCommit: (item) => {
+      commitTextElement(item);
+    },
+    onDelete: (itemId) => {
+      deleteTextElement(itemId);
+    },
+    onDragStateChange: setIsObjectDragging,
+    onMoveWithDrag: (event, item, dragState) => {
+      const bounds = getPageBounds();
+
+      if (!bounds) {
+        return;
+      }
+
+      if (dragState.mode === "move") {
+        const maxX = Math.max(0, bounds.width - item.width);
+        const maxY = Math.max(0, bounds.height - item.height);
+        const nextX = clampValue(dragState.originX + (event.clientX - dragState.startX), 0, maxX);
+        const nextY = clampValue(dragState.originY + (event.clientY - dragState.startY), 0, maxY);
+
+        setTextElements((current) =>
+          current.map((currentItem) => (currentItem.id === item.id ? { ...currentItem, x: nextX, y: nextY } : currentItem)),
+        );
+        return;
+      }
+
+      const maxWidth = Math.max(minTextBlockWidth, Math.min(maxTextBlockWidth, bounds.width - item.x));
+      const maxHeight = Math.max(minTextBlockHeight, bounds.height - item.y);
+      const nextWidth = clampValue(dragState.originWidth + (event.clientX - dragState.startX), minTextBlockWidth, maxWidth);
+      const nextHeight = clampValue(dragState.originHeight + (event.clientY - dragState.startY), minTextBlockHeight, maxHeight);
+
+      setTextElements((current) =>
+        current.map((currentItem) =>
+          currentItem.id === item.id ? { ...currentItem, width: nextWidth, height: nextHeight } : currentItem,
+        ),
+      );
+    },
+    onTrashHoverChange: setIsTrashHover,
+  });
+
+  function handleTextDragStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    const targetElement = getItemOrStop(targetId, event);
+
+    if (!targetElement) {
+      return;
+    }
+
+    handlePressStart(event, targetElement);
+  }
+
+  function handleTextResizeStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    const targetElement = getItemOrStop(targetId, event);
+
+    if (!targetElement) {
+      return;
+    }
+
+    beginResize(event, targetElement);
+  }
+
+  function handleTextDragMove(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
     const targetElement = getTextElement(targetId);
 
     if (!targetElement) {
       return;
     }
 
-    closeActiveTextEditing();
-    selectTextElement(targetId);
-    const promotedElement = promoteTextElement(targetId) ?? targetElement;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setIsObjectDragging(mode === "move");
-    setIsTrashHover(false);
-    dragRef.current = {
-      id: targetId,
-      mode,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: promotedElement.x,
-      originY: promotedElement.y,
-      originWidth: promotedElement.width,
-      originHeight: promotedElement.height,
-    };
-  }
-
-  function handleTextDragStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    beginTextTransform(targetId, "move", event);
-  }
-
-  function handleTextResizeStart(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    beginTextTransform(targetId, "resize", event);
-  }
-
-  function handleTextDragMove(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    const dragState = dragRef.current;
-
-    if (!dragState || dragState.id !== targetId || dragState.pointerId !== event.pointerId) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    const targetElement = getTextElement(targetId);
-    const bounds = getPageBounds();
-
-    if (!targetElement || !bounds) {
-      return;
-    }
-
-    if (dragState.mode === "move") {
-      const maxX = Math.max(0, bounds.width - targetElement.width);
-      const maxY = Math.max(0, bounds.height - targetElement.height);
-      const nextX = clampValue(dragState.originX + (event.clientX - dragState.startX), 0, maxX);
-      const nextY = clampValue(dragState.originY + (event.clientY - dragState.startY), 0, maxY);
-      setIsObjectDragging(true);
-      setIsTrashHover(isPointInBounds(event.clientX, event.clientY, getTrashBounds()));
-
-      setTextElements((current) =>
-        current.map((item) => (item.id === targetId ? { ...item, x: nextX, y: nextY } : item)),
-      );
-      return;
-    }
-
-    const maxWidth = Math.max(minTextBlockWidth, Math.min(maxTextBlockWidth, bounds.width - targetElement.x));
-    const maxHeight = Math.max(minTextBlockHeight, bounds.height - targetElement.y);
-    const nextWidth = clampValue(dragState.originWidth + (event.clientX - dragState.startX), minTextBlockWidth, maxWidth);
-    const nextHeight = clampValue(dragState.originHeight + (event.clientY - dragState.startY), minTextBlockHeight, maxHeight);
-
-    setTextElements((current) =>
-      current.map((item) => (item.id === targetId ? { ...item, width: nextWidth, height: nextHeight } : item)),
-    );
+    handleMove(event, targetElement);
   }
 
   function handleTextDragEnd(targetId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    const dragState = dragRef.current;
-    const finalItem = getTextElement(targetId);
+    finishInteraction(event, targetId);
 
-    if (!dragState || dragState.id !== targetId || dragState.pointerId !== event.pointerId) {
-      return;
+    if (!isPointInBounds(event.clientX, event.clientY, getTrashBounds()) && getTextElement(targetId)) {
+      selectTextElement(targetId);
     }
-
-    event.preventDefault();
-    event.stopPropagation();
-    if (
-      finishDragInteraction({
-        target: event.currentTarget,
-        pointerId: event.pointerId,
-        dragMatches: true,
-        shouldDelete: dragState.mode === "move" && isPointInBounds(event.clientX, event.clientY, getTrashBounds()),
-        finalItem,
-        resetDragState,
-        onDelete: () => deleteTextElement(targetId),
-        onCommit: (item) => commitTextElement(item),
-      })
-    ) {
-      return;
-    }
-
-    selectTextElement(targetId);
   }
 
   return {
