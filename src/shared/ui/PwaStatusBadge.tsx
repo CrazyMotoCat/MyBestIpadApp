@@ -25,6 +25,7 @@ import {
   recordStorageWriteSuccess,
   StorageHealthSummary,
 } from "@/shared/lib/db/storageHealth";
+import { buildStorageRecoveryPlan } from "@/shared/lib/db/storageRecoveryPlan";
 import { auditStorageIntegrity, repairStorageIntegrity, StorageIntegrityReport } from "@/shared/lib/db/storageIntegrity";
 import { getStorageInsightsSummary, StorageInsightsSummary } from "@/shared/lib/db/storageInsights";
 import {
@@ -319,6 +320,12 @@ export function PwaStatusBadge() {
   const storageUsagePercent = getStorageUsagePercent(snapshot);
   const storageTone = getStorageUsageTone(storageUsagePercent);
   const storageRecoverySteps = getStorageRecoverySteps(storageTone);
+  const storageRecoveryPlan = buildStorageRecoveryPlan({
+    storageTone,
+    storageInsights,
+    storageHealth,
+    draftDiagnostics,
+  });
   const offlineReadiness = getOfflineReadinessView({
     isSecureContext: snapshot.isSecureContext,
     hasServiceWorker: snapshot.hasServiceWorker,
@@ -646,6 +653,42 @@ export function PwaStatusBadge() {
               </ul>
               </div>
             ) : null}
+          {storageRecoveryPlan.steps.length ? (
+            <div className="pwa-status__actions">
+              <div className="pwa-status__actions-title">План восстановления после quota-pressure</div>
+              <ul className="pwa-status__actions-list">
+                {storageRecoveryPlan.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ul>
+              <div className="pwa-status__button-group">
+                {storageRecoveryPlan.primaryNotebookId ? (
+                  <button
+                    type="button"
+                    className="pwa-status__action-button"
+                    onClick={() => handleOpenNotebook(storageRecoveryPlan.primaryNotebookId!)}
+                  >
+                    Открыть самый тяжёлый блокнот
+                  </button>
+                ) : null}
+                {storageRecoveryPlan.shouldOpenHome ? (
+                  <button type="button" className="pwa-status__action-button" onClick={handleOpenHome}>
+                    Перейти к фону приложения
+                  </button>
+                ) : null}
+                {storageRecoveryPlan.shouldClearDrafts ? (
+                  <button
+                    type="button"
+                    className="pwa-status__action-button"
+                    onClick={() => void handleClearDrafts()}
+                    disabled={isClearingDrafts}
+                  >
+                    {isClearingDrafts ? "Очищаем черновики..." : "Очистить stale drafts"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           {storageIntegrity &&
           (storageIntegrity.orphanAssetIds.length > 0 ||
             storageIntegrity.danglingNotebookAttachmentIds.length > 0 ||

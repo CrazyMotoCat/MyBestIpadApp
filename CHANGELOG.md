@@ -106,4 +106,8 @@
 - `PWA статус` now includes storage health diagnostics for `IndexedDB` / `localStorage` availability and the last known local write result, so QA and support can inspect persistence state without opening DevTools.
 - pending page recovery drafts are now observable inside `PWA статус`, including storage source and draft kind, and can be cleared manually when reopen/recovery state needs a clean reset.
 - storage-heavy local operations now leave a lightweight write-status trail for support/debug scenarios, so storage failures are easier to localize after asset writes, background updates and integrity repair actions.
+- `PWA статус` now builds a prioritized recovery plan for quota-pressure scenarios, including the heaviest notebook, app background cleanup and stale draft cleanup, so blob-heavy recovery is guided instead of implicit.
+- `package.json` is now pinned to the exact versions already resolved in `package-lock.json`, so the project no longer depends on `latest` for reproducible sprint-2 validation and CI.
+- the storage/offline safety net now also covers the recovery-plan helper, so `v1.2` has direct tests for both diagnostics and post-quota cleanup guidance.
+- sprint 2 now also has a dedicated manual smoke pack in `SPRINT_2_SMOKE_PACK.md`, so quota/storage/recovery acceptance is fixed outside ad-hoc testing.
 - стартовал `v1.3 — Notebook Power Features`: добавлены локальный поиск по блокнотам и страницам, фильтр bookmarked pages, поиск по закладкам в редакторе и быстрый jump-strip внутри блокнота.

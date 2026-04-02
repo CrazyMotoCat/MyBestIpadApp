@@ -88,6 +88,10 @@ In progress now:
 - следующий support/debug слой `v1.2` уже добавлен в `PWA статус`: там теперь видны доступность `IndexedDB`/`localStorage`, последний известный результат локальной записи и общий storage health summary без необходимости открывать DevTools.
 - тот же reliability-слой теперь делает явными и pending page recovery drafts: `PWA статус` показывает, сколько их осталось, из каких storage-источников они пришли и какого они типа (`recovery` / `snapshot`).
 - следующий cleanup на том же слое тоже уже начат: stale recovery drafts можно вручную очистить из `PWA статуса`, чтобы reopen/recovery сценарии было проще сбрасывать в чистое состояние при QA и поддержке.
+- blob-heavy recovery guidance для `v1.2` теперь тоже оформлен в явный recovery plan: `PWA статус` подсказывает, какой блокнот/фон чистить первым и когда имеет смысл сбросить stale drafts после quota-pressure.
+- quality хвост того же слоя тоже закрыт: зависимости зафиксированы точными версиями из lockfile, а automated safety net расширен до recovery-plan helper-а.
+- acceptance-хвост этого же milestone тоже закрыт: для `v1.2` есть отдельный `SPRINT_2_SMOKE_PACK.md`, чтобы quota/storage/recovery сценарии прогонялись по одному явному manual checklist.
+- на текущем baseline `v1.2 — Offline Reliability` можно считать функционально закрытым milestone; следующий крупный продуктовый фокус логично смещается к `v1.3`.
 
 ### v1.3 — Notebook Power Features
 - добавить шаблоны блокнотов и стартовых страниц;
@@ -284,10 +288,10 @@ Success signal:
 ## Suggested immediate next steps
 
 Лучший практический порядок сейчас:
-1. Дожать оставшийся `v1.2` слой вокруг blob-heavy recovery: cleanup guidance для самых тяжёлых notebook/background scenarios и более явные действия после quota-pressure.
-2. Расширять automated safety net вокруг storage/offline helper-ов, storage health summary и reopen/recovery сценариев.
-3. После этого переходить к более глубокому `v1.3`: thumbnails, richer page metadata и templates.
-4. Только затем расширять product growth слой дальше, не размывая offline/storage reliability фокус.
+1. Переходить к следующему слою `v1.3`: thumbnails, richer page metadata и templates, не ломая уже зафиксированный offline/storage contract.
+2. Держать `v1.2` только в режиме regression-safe поддержки: не расширять scope, а покрывать новые storage/offline helper-ы тестами по мере появления.
+3. После этого возвращаться к оставшимся quality/polish задачам без возврата к `latest`-зависимостям и без silent-regressions в PWA/update flow.
+4. Новые product features добавлять только поверх уже проверенного install/reopen/update поведения.
 
 ## Explicit non-goals for the near term
 

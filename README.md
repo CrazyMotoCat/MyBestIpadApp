@@ -38,13 +38,17 @@ Sprint 1 по offline launch hardening завершён.
 
 ## Что дальше
 
-Следующий рабочий фокус проекта: `Sprint 2 / v1.2 storage-quota safety`.
+`Sprint 2 / v1.2 storage-quota safety` на текущем baseline можно считать закрытым.
 
-Главные задачи следующего шага:
-- quota-aware preflight для тяжёлых изображений и файлов;
-- более сильный UX для storage/quota ошибок Safari;
-- cleanup path для тяжёлых локальных assets;
-- дальнейшее усиление recovery вокруг blob-heavy сценариев.
+Что уже закрыто в этом слое:
+- quota-aware preflight для тяжёлых изображений, файлов, обложек и фона;
+- storage/quota diagnostics, storage health summary и backup import/export в `PWA статус`;
+- cleanup/repair path для локальных links и stale recovery drafts;
+- явный recovery plan для blob-heavy quota-pressure сценариев;
+- зафиксированные версии зависимостей вместо `latest`;
+- отдельный smoke-check для ручной проверки storage/quota/recovery сценариев.
+
+Следующий рабочий фокус проекта: `v1.3 / Notebook Power Features`.
 
 ## Стек
 
@@ -115,4 +119,5 @@ npm run build
 - [ROADMAP.md](/D:/Codex/MyBestIpadApp/ROADMAP.md) — куда проект идёт дальше;
 - [CHANGELOG.md](/D:/Codex/MyBestIpadApp/CHANGELOG.md) — заметные изменения;
 - [SPRINT_1_SMOKE_PACK.md](/D:/Codex/MyBestIpadApp/SPRINT_1_SMOKE_PACK.md) — release smoke-check для Sprint 1;
+- [SPRINT_2_SMOKE_PACK.md](/D:/Codex/MyBestIpadApp/SPRINT_2_SMOKE_PACK.md) — storage/quota/recovery smoke-check для Sprint 2;
 - [PROJECT_SUMMARY.md](/D:/Codex/MyBestIpadApp/PROJECT_SUMMARY.md) — ранний проектный контекст и продуктовая рамка.
